@@ -1941,28 +1941,96 @@ func (s *Store) Status() (map[string]int, error) {
 // resource with a NULL last_synced_at (recorded but never completed a sync)
 // or with no sync_state row at all is simply absent from the returned map --
 // callers should treat a missing key as "never synced" rather than an error.
+// LastSyncedTimes unions two sources, taking the later timestamp per
+// resource_type where both exist:
+//
+//   - sync_state.last_synced_at: written for flat resources (classes,
+//     workouts) on every completed sync, including a zero-item completion,
+//     but performance/workout_details (parent-keyed dependents fetched one
+//     request per already-synced workout) only get a sync_state row here
+//     under --full mode's turn-based backfill tracking, and even then under
+//     a compound "<resource>:full_progress" key this deliberately does not
+//     parse back to a plain resource name.
+//   - resources.synced_at, aggregated by MAX per resource_type: refreshed by
+//     every upsert (ON CONFLICT ... synced_at = excluded.synced_at, see
+//     Upsert/upsertGenericResourceTx), so it reflects the true last-write
+//     time for any resource with at least one stored row, dependents
+//     included, independent of which sync mode wrote it.
+//
+// A resource with zero rows in `resources` (dependent or flat) and no
+// sync_state row either is absent from the returned map -- callers should
+// treat a missing key as "never synced" rather than an error.
 func (s *Store) LastSyncedTimes() (map[string]time.Time, error) {
+	times := make(map[string]time.Time)
+
 	rows, err := s.db.Query(
 		`SELECT resource_type, last_synced_at FROM sync_state WHERE last_synced_at IS NOT NULL`,
 	)
-	if err != nil {
-		if syncStateMissingTable(err) {
-			return map[string]time.Time{}, nil
+	switch {
+	case err == nil:
+		defer rows.Close()
+		for rows.Next() {
+			var rt string
+			var syncedAt time.Time
+			if err := rows.Scan(&rt, &syncedAt); err != nil {
+				return nil, err
+			}
+			times[rt] = syncedAt
 		}
-		return nil, err
-	}
-	defer rows.Close()
-
-	times := make(map[string]time.Time)
-	for rows.Next() {
-		var rt string
-		var syncedAt time.Time
-		if err := rows.Scan(&rt, &syncedAt); err != nil {
+		if err := rows.Err(); err != nil {
 			return nil, err
 		}
-		times[rt] = syncedAt
+	case syncStateMissingTable(err):
+		// A store opened before sync_state existed -- fall through to the
+		// resources-table pass below rather than failing outright.
+	default:
+		return nil, err
 	}
-	return times, rows.Err()
+
+	resourceRows, err := s.db.Query(`SELECT resource_type, MAX(synced_at) FROM resources GROUP BY resource_type`)
+	if err != nil {
+		return nil, err
+	}
+	defer resourceRows.Close()
+	for resourceRows.Next() {
+		var rt string
+		var syncedAtText string
+		// Scanning straight into time.Time works for a plain column
+		// reference (the sync_state pass above), where the driver applies
+		// DATETIME column-type-affinity conversion, but MAX(...) erases that
+		// affinity and returns a bare string -- scan as text and parse the
+		// same RFC3339 format every write path in this file uses.
+		if err := resourceRows.Scan(&rt, &syncedAtText); err != nil {
+			return nil, err
+		}
+		syncedAt, err := time.Parse(time.RFC3339, syncedAtText)
+		if err != nil {
+			continue
+		}
+		if existing, ok := times[rt]; !ok || syncedAt.After(existing) {
+			times[rt] = syncedAt
+		}
+	}
+	return times, resourceRows.Err()
+}
+
+// HasSyncHistory reports whether any sync has ever completed against this
+// store, even one that produced zero rows -- distinct from Status()'s
+// row-count-based view, which cannot tell "never synced" apart from
+// "synced successfully with nothing to store" (e.g. a dependent resource
+// with no pending parents, or a flat resource whose account genuinely has
+// no items). Consulted by workflow status so a store that completed a real
+// sync isn't reported as empty just because Status() found no rows.
+func (s *Store) HasSyncHistory() (bool, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_state`).Scan(&count)
+	if err != nil {
+		if syncStateMissingTable(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // syncStateMissingTable reports whether err is sqlite's "no such table"

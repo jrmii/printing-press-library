@@ -184,9 +184,13 @@ func newWorkflowStatusCmd(flags *rootFlags) *cobra.Command {
 				if err != nil {
 					return err
 				}
+				hasSyncHistory, err := s.HasSyncHistory()
+				if err != nil {
+					return err
+				}
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
-				return enc.Encode(workflowStatusEnvelope(status, lastSynced, dbPath))
+				return enc.Encode(workflowStatusEnvelope(status, lastSynced, hasSyncHistory, dbPath))
 			}
 
 			if len(status) == 0 {
@@ -227,7 +231,14 @@ type workflowStatusResourceEntry struct {
 // situation, so this matches that shape instead of leaving the JSON/agent
 // caller (the one who most needs a machine-readable answer) with nothing
 // actionable.
-func workflowStatusEnvelope(status map[string]int, lastSynced map[string]time.Time, dbPath string) map[string]any {
+//
+// hasSyncHistory (Store.HasSyncHistory) distinguishes "never synced" from
+// "a sync completed but stored nothing" -- Status()'s row-count view alone
+// can't tell those apart (e.g. a dependent resource with no pending
+// parents, or a flat resource whose account genuinely has zero items), so
+// len(status)==0 by itself would misreport a genuinely-synced, empty-result
+// store as needing an initial archive.
+func workflowStatusEnvelope(status map[string]int, lastSynced map[string]time.Time, hasSyncHistory bool, dbPath string) map[string]any {
 	resources := make(map[string]workflowStatusResourceEntry, len(status))
 	total := 0
 	for resource, count := range status {
@@ -240,7 +251,7 @@ func workflowStatusEnvelope(status map[string]int, lastSynced map[string]time.Ti
 	}
 
 	storeStatus := "ready"
-	if len(status) == 0 {
+	if len(status) == 0 && !hasSyncHistory {
 		storeStatus = "empty"
 	}
 

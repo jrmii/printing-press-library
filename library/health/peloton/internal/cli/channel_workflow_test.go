@@ -391,4 +391,71 @@ func TestWorkflowStatusJSONIncludesCountsAndLastSyncedAt(t *testing.T) {
 	if envelope.Total == 0 {
 		t.Fatal("total = 0, want the sum of all resource counts")
 	}
+
+	// performance is a parent-keyed dependent (one request per already-
+	// synced workout, no bulk endpoint): in the default (non---full) sync
+	// mode it never gets a plain sync_state row, only resources.synced_at
+	// from its own upserts. Guards the review finding that dependent
+	// resources' last_synced_at was silently omitted from this envelope.
+	performance, ok := envelope.Resources["performance"]
+	if !ok {
+		t.Fatalf("resources missing \"performance\" entry: %#v", envelope.Resources)
+	}
+	if performance.LastSyncedAt == "" {
+		t.Fatal("performance last_synced_at is empty after a real archive -- dependent-resource timestamps must fall back to resources.synced_at")
+	}
+}
+
+// TestWorkflowStatusJSONDoesNotMisclassifyAZeroResultSyncAsEmpty guards a
+// review finding: Status()'s row-count view can't distinguish "never
+// synced" from "a sync completed but the account genuinely had zero items"
+// -- both look like zero rows in the resources table. A flat resource sync
+// still writes a sync_state row even when it fetches nothing, so
+// HasSyncHistory must be consulted alongside Status() before reporting
+// store_status "empty", or a real completed sync gets told to archive again.
+func TestWorkflowStatusJSONDoesNotMisclassifyAZeroResultSyncAsEmpty(t *testing.T) {
+	home := t.TempDir()
+	restore, err := cliutil.SetHomeOverride(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+	t.Setenv("PELOTON_BASE_URL", server.URL)
+	t.Setenv("PELOTON_USER_ID", "u1")
+	seedValidOAuthBundleForLiveFetchTests(t)
+
+	dbPath := filepath.Join(home, "data", "data.db")
+	root := newRootCmd(&rootFlags{})
+	var syncOut, syncErr bytes.Buffer
+	root.SetOut(&syncOut)
+	root.SetErr(&syncErr)
+	root.SetArgs([]string{"sync", "--resources", "workouts", "--db", dbPath, "--home", home, "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("sync --resources workouts: %v\nstdout: %s\nstderr: %s", err, syncOut.String(), syncErr.String())
+	}
+
+	root = newRootCmd(&rootFlags{})
+	var out, stderr bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"workflow", "status", "--db", dbPath, "--home", home, "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("workflow status --json: %v\nstdout: %s\nstderr: %s", err, out.String(), stderr.String())
+	}
+
+	var envelope struct {
+		StoreStatus string         `json:"store_status"`
+		Resources   map[string]any `json:"resources"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil {
+		t.Fatalf("workflow status --json output is not valid JSON: %v\n%s", err, out.String())
+	}
+	if envelope.StoreStatus != "ready" {
+		t.Fatalf("store_status = %q, want %q -- a completed zero-result sync is not the same as never having synced", envelope.StoreStatus, "ready")
+	}
 }
