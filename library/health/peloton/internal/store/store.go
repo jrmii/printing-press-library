@@ -249,7 +249,17 @@ func (s *Store) SchemaVersion() (int, error) {
 // connection so it sees the writes performed by the in-flight BEGIN
 // IMMEDIATE transaction; using s.db here would route through the pool
 // and BUSY against the holding writer under concurrent migrators.
-func (s *Store) ensureColumn(ctx context.Context, conn *sql.Conn, table, column, decl string) error {
+//
+// backfillSQL, when non-empty, runs exactly once: immediately after this
+// call is the one that actually performs the ALTER TABLE, never on the
+// "column already exists" or "table doesn't exist" short-circuits, and
+// never on the concurrent-Open() "duplicate column name" race (the caller
+// that won that race already ran it). Use this for a new column whose
+// zero-value (NULL/false/0) would misrepresent pre-existing rows that
+// predate the column's meaning -- e.g. completed_at, where every row that
+// existed before this column was introduced represents a sync this
+// codebase already trusted as done under the old, coarser semantics.
+func (s *Store) ensureColumn(ctx context.Context, conn *sql.Conn, table, column, decl, backfillSQL string) error {
 	var name string
 	err := conn.QueryRowContext(ctx,
 		`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table,
@@ -286,11 +296,18 @@ func (s *Store) ensureColumn(ctx context.Context, conn *sql.Conn, table, column,
 		// A concurrent Open() may have added the column between our
 		// PRAGMA check and this ALTER. SQLite returns SQLITE_ERROR with
 		// "duplicate column name", which busy_timeout does not retry.
-		// The DB is now in the desired state regardless of who won.
+		// The DB is now in the desired state regardless of who won -- and
+		// whichever caller's ALTER actually succeeded already ran the
+		// backfill below, so this caller must not run it again.
 		if strings.Contains(err.Error(), "duplicate column name") {
 			return nil
 		}
 		return fmt.Errorf("add column %s.%s: %w", table, column, err)
+	}
+	if backfillSQL != "" {
+		if _, err := conn.ExecContext(ctx, backfillSQL); err != nil {
+			return fmt.Errorf("backfilling %s.%s: %w", table, column, err)
+		}
 	}
 	return nil
 }
@@ -310,7 +327,7 @@ func (s *Store) ensureColumn(ctx context.Context, conn *sql.Conn, table, column,
 // any spec whose dependent-resource snake_cased name is a SQL reserved
 // word.
 func (s *Store) backfillColumns(ctx context.Context, conn *sql.Conn) error {
-	for _, c := range []struct{ table, column, decl string }{
+	for _, c := range []struct{ table, column, decl, backfill string }{
 		{table: "classes", column: "title", decl: "TEXT"},
 		{table: "classes", column: "duration", decl: "INTEGER"},
 		{table: "workouts", column: "start_time", decl: "TEXT"},
@@ -319,9 +336,18 @@ func (s *Store) backfillColumns(ctx context.Context, conn *sql.Conn) error {
 		{table: "sync_state", column: "last_cursor", decl: "TEXT"},
 		{table: "sync_state", column: "last_synced_at", decl: "DATETIME"},
 		{table: "sync_state", column: "total_count", decl: "INTEGER DEFAULT 0"},
-		{table: "sync_state", column: "completed_at", decl: "DATETIME"},
+		// completed_at is new: every sync_state row that already existed
+		// when this column was introduced was written under the old,
+		// coarser semantics this codebase already trusted as "synced" --
+		// leaving them NULL would make HasSyncHistory() misreport an
+		// upgraded store with real completed history as empty. Backfill
+		// runs exactly once, only for rows that predate the column (see
+		// ensureColumn's backfillSQL doc comment); every row written after
+		// this version ships goes through SaveSyncState/SaveSyncStateCompleted,
+		// which set completed_at deliberately and are not affected by this.
+		{table: "sync_state", column: "completed_at", decl: "DATETIME", backfill: `UPDATE sync_state SET completed_at = last_synced_at WHERE last_synced_at IS NOT NULL`},
 	} {
-		if err := s.ensureColumn(ctx, conn, c.table, c.column, c.decl); err != nil {
+		if err := s.ensureColumn(ctx, conn, c.table, c.column, c.decl, c.backfill); err != nil {
 			return err
 		}
 	}
