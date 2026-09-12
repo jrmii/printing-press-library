@@ -45,7 +45,7 @@
     },
     {
       "name": "classes_catalog",
-      "description": "List a caller-scoped archived class catalog page. Required: browse_category, content_format. Optional: limit (default: 100), page (default: 0), sort_by (default: original_air_time) (plus 3 more). Returns array of Class.",
+      "description": "List a caller-scoped archived class catalog page. Required: browse_category, content_format. Optional: limit (default: 100), page (default: 0), sort_by (default: original_air_time) (plus 7 more). Returns array of Class.",
       "method": "GET",
       "path": "/api/v2/ride/archived",
       "params": [
@@ -98,6 +98,30 @@
           "type": "string",
           "location": "query",
           "description": "Optional provider class-type filter."
+        },
+        {
+          "name": "duration",
+          "type": "int",
+          "location": "query",
+          "description": "Optional provider class-length filter, in seconds (e.g. 1800 for 30 minutes). Accepted values are advertised by classes_filters."
+        },
+        {
+          "name": "super_genre_id",
+          "type": "string",
+          "location": "query",
+          "description": "Optional provider music-genre filter. Accepted values are advertised by classes_filters."
+        },
+        {
+          "name": "has_workout",
+          "type": "bool",
+          "location": "query",
+          "description": "Optional tri-state filter: true for classes you've already taken, false for classes you haven't. Omitting the parameter leaves it unfiltered -- omitted and false are different queries."
+        },
+        {
+          "name": "is_favorite_ride",
+          "type": "bool",
+          "location": "query",
+          "description": "Optional tri-state filter: true for bookmarked classes, false for not-bookmarked. Omitting the parameter leaves it unfiltered -- omitted and false are different queries."
         }
       ]
     },
@@ -130,7 +154,7 @@
     },
     {
       "name": "classes_search",
-      "description": "Search the caller-scoped catalog by factual provider filters; U4 adds offline structural predicates. Required: browse_category, content_format. Optional: limit (default: 100), page (default: 0), sort_by (default: original_air_time) (plus 3 more). Returns array of Class.",
+      "description": "Search the caller-scoped catalog by factual provider filters; U4 adds offline structural predicates. Required: browse_category, content_format. Optional: limit (default: 100), page (default: 0), sort_by (default: original_air_time) (plus 7 more). Returns array of Class.",
       "method": "GET",
       "path": "/api/v2/ride/archived",
       "params": [
@@ -183,6 +207,30 @@
           "type": "string",
           "location": "query",
           "description": "Optional provider class-type filter."
+        },
+        {
+          "name": "duration",
+          "type": "int",
+          "location": "query",
+          "description": "Optional provider class-length filter, in seconds (e.g. 1800 for 30 minutes). Accepted values are advertised by classes_filters."
+        },
+        {
+          "name": "super_genre_id",
+          "type": "string",
+          "location": "query",
+          "description": "Optional provider music-genre filter. Accepted values are advertised by classes_filters."
+        },
+        {
+          "name": "has_workout",
+          "type": "bool",
+          "location": "query",
+          "description": "Optional tri-state filter: true for classes you've already taken, false for classes you haven't. Omitting the parameter leaves it unfiltered -- omitted and false are different queries."
+        },
+        {
+          "name": "is_favorite_ride",
+          "type": "bool",
+          "location": "query",
+          "description": "Optional tri-state filter: true for bookmarked classes, false for not-bookmarked. Omitting the parameter leaves it unfiltered -- omitted and false are different queries."
         }
       ]
     },
