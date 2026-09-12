@@ -3051,7 +3051,16 @@ var pageEnvelopeMetadataKeys = map[string]bool{
 // Includes both flat resources and dependent (parent-child) resources so a
 // failed child sync flagged x-critical: true exits non-zero just like a
 // flat-resource critical failure.
-var criticalResources = map[string]bool{}
+//
+// "workouts" is hand-marked critical: it's the root of this CLI's dependent
+// graph (performance, workout_details, and classes_detail all fan out from
+// it via planDependentSync/planClassDetailSync), so a failed "workouts"
+// flat sync empties every resource that depends on it. Left at the default
+// non-critical classification, an archive run where workouts fails outright
+// still exits 0 -- reported live: a 5-resource archive with workouts errored
+// completely still printed sync_summary with no non-zero exit, masking a
+// completely empty workout sync behind a green result.
+var criticalResources = map[string]bool{"workouts": true}
 
 // extractID resolves an item's primary-key field. It consults the
 // per-resource templated override first; on miss, it falls through to the

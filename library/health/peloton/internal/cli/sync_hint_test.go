@@ -173,3 +173,17 @@ func TestHintIfStale_ResourceFilterUsesRequestedResource(t *testing.T) {
 		t.Fatalf("stderr = %q, want unsynced comments hint", got)
 	}
 }
+
+// TestWorkoutsIsMarkedCriticalForSyncExitCode guards a live-tested bug: an
+// archive run where the flat "workouts" resource failed outright still
+// exited 0 by default, because criticalResources classified no resource as
+// critical -- masking a completely empty workout sync (and therefore empty
+// performance/workout_details/classes_detail, all of which fan out from
+// workouts via planDependentSync/planClassDetailSync) behind a green
+// sync_summary. "workouts" must stay marked critical so a failed flat sync
+// of it exits non-zero even without --strict.
+func TestWorkoutsIsMarkedCriticalForSyncExitCode(t *testing.T) {
+	if !criticalResources["workouts"] {
+		t.Fatal(`criticalResources["workouts"] = false, want true -- a failed workouts sync must exit non-zero by default, since performance/workout_details/classes_detail all depend on it`)
+	}
+}
