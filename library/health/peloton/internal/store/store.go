@@ -319,6 +319,7 @@ func (s *Store) backfillColumns(ctx context.Context, conn *sql.Conn) error {
 		{table: "sync_state", column: "last_cursor", decl: "TEXT"},
 		{table: "sync_state", column: "last_synced_at", decl: "DATETIME"},
 		{table: "sync_state", column: "total_count", decl: "INTEGER DEFAULT 0"},
+		{table: "sync_state", column: "completed_at", decl: "DATETIME"},
 	} {
 		if err := s.ensureColumn(ctx, conn, c.table, c.column, c.decl); err != nil {
 			return err
@@ -377,7 +378,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			resource_type TEXT PRIMARY KEY,
 			last_cursor TEXT,
 			last_synced_at DATETIME,
-			total_count INTEGER DEFAULT 0
+			total_count INTEGER DEFAULT 0,
+			completed_at DATETIME
 		)`,
 		resourcesFTSCreateSQL,
 		`CREATE TABLE IF NOT EXISTS "classes" (
@@ -1549,15 +1551,49 @@ func unwrapIDBearingEnvelopeItem(resourceType string, item json.RawMessage, obj 
 	return candidate, data, true
 }
 
+// SaveSyncState records in-progress sync state: a --full reset (cursor="",
+// count=0, before any fetch), a mid-pagination resumability checkpoint
+// (after each page, well before the resource is done), or a dependent
+// resource's continuation bookkeeping. completed_at is explicitly cleared
+// on both insert and update -- a --full reset followed by a crash before
+// the first page completes must not read as "this resource finished
+// syncing" (see SaveSyncStateCompleted, which is the only writer that ever
+// sets completed_at, and HasSyncHistory, which depends on that
+// distinction). Re-syncing a resource that previously completed clears its
+// completed_at until that run reaches its own SaveSyncStateCompleted call --
+// harmless in practice, since a resource with prior completed rows already
+// has rows in the resources table, which Status() reflects independently
+// of this flag.
 func (s *Store) SaveSyncState(resourceType, cursor string, count int) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	_, err := s.db.Exec(
-		`INSERT INTO sync_state (resource_type, last_cursor, last_synced_at, total_count)
-		 VALUES (?, ?, ?, ?)
+		`INSERT INTO sync_state (resource_type, last_cursor, last_synced_at, total_count, completed_at)
+		 VALUES (?, ?, ?, ?, NULL)
 		 ON CONFLICT(resource_type) DO UPDATE SET last_cursor = excluded.last_cursor,
-		 last_synced_at = excluded.last_synced_at, total_count = excluded.total_count`,
+		 last_synced_at = excluded.last_synced_at, total_count = excluded.total_count, completed_at = NULL`,
 		resourceType, cursor, time.Now().UTC().Format(time.RFC3339), count,
+	)
+	return err
+}
+
+// SaveSyncStateCompleted is SaveSyncState plus stamping completed_at to the
+// same timestamp as last_synced_at. Call this only from a code path that is
+// actually about to return after a resource's flat sync loop exits by
+// normal control flow (natural completion or an intentional --max-pages
+// cap) -- never from a mid-loop checkpoint or a --full reset, both of which
+// must leave completed_at cleared so an interrupted run in between doesn't
+// read as done. See HasSyncHistory's doc comment for what depends on this.
+func (s *Store) SaveSyncStateCompleted(resourceType, cursor string, count int) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(
+		`INSERT INTO sync_state (resource_type, last_cursor, last_synced_at, total_count, completed_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(resource_type) DO UPDATE SET last_cursor = excluded.last_cursor,
+		 last_synced_at = excluded.last_synced_at, total_count = excluded.total_count, completed_at = excluded.completed_at`,
+		resourceType, cursor, now, count, now,
 	)
 	return err
 }
@@ -2021,9 +2057,21 @@ func (s *Store) LastSyncedTimes() (map[string]time.Time, error) {
 // with no pending parents, or a flat resource whose account genuinely has
 // no items). Consulted by workflow status so a store that completed a real
 // sync isn't reported as empty just because Status() found no rows.
+//
+// Checks completed_at specifically, not just "any sync_state row exists":
+// --full writes a reset row (cursor="", count=0) for every named resource
+// BEFORE fetching starts, and the flat sync loop writes a resumability
+// checkpoint after every page, well before a resource is actually done --
+// both would look identical to a genuine zero-item completion if any row
+// were enough. Only SaveSyncStateCompleted (called once a resource's flat
+// sync loop actually returns, by natural completion or an intentional
+// --max-pages cap -- never from a crash or an in-progress checkpoint)
+// stamps completed_at, so an interrupted initial sync correctly still
+// reads as "never completed" here even though sync_state already has a row
+// for it.
 func (s *Store) HasSyncHistory() (bool, error) {
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_state`).Scan(&count)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_state WHERE completed_at IS NOT NULL`).Scan(&count)
 	if err != nil {
 		if syncStateMissingTable(err) {
 			return false, nil

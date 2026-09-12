@@ -459,3 +459,60 @@ func TestWorkflowStatusJSONDoesNotMisclassifyAZeroResultSyncAsEmpty(t *testing.T
 		t.Fatalf("store_status = %q, want %q -- a completed zero-result sync is not the same as never having synced", envelope.StoreStatus, "ready")
 	}
 }
+
+// TestWorkflowStatusJSONReportsEmptyForInterruptedSyncNotJustReset guards a
+// review finding on the fix above: --full writes a sync_state row (cursor
+// "", count 0) for every named resource BEFORE fetching starts, and the
+// flat sync loop checkpoints sync_state after every page, well before a
+// resource is actually done -- both are bit-for-bit identical to a genuine
+// zero-item completion if HasSyncHistory trusted "any sync_state row
+// exists." An account interrupted right after that reset/checkpoint (crash,
+// kill -9, container restart) would then have sync_state populated but the
+// resources table still empty, and workflow status must not call that
+// "ready" -- it has to say "empty" and point back at archiving, the same
+// as a store that was never touched at all. This drives SaveSyncState (not
+// SaveSyncStateCompleted) directly, matching exactly what --full's reset
+// and the mid-pagination checkpoint call, without running a real sync.
+func TestWorkflowStatusJSONReportsEmptyForInterruptedSyncNotJustReset(t *testing.T) {
+	home := t.TempDir()
+	restore, err := cliutil.SetHomeOverride(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+
+	dbPath := filepath.Join(home, "data", "data.db")
+	db, err := store.OpenWithContext(t.Context(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveSyncState("workouts", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd(&rootFlags{})
+	var out, stderr bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"workflow", "status", "--db", dbPath, "--home", home, "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("workflow status --json: %v\nstdout: %s\nstderr: %s", err, out.String(), stderr.String())
+	}
+
+	var envelope struct {
+		StoreStatus string `json:"store_status"`
+		NextStep    string `json:"next_step"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &envelope); err != nil {
+		t.Fatalf("workflow status --json output is not valid JSON: %v\n%s", err, out.String())
+	}
+	if envelope.StoreStatus != "empty" {
+		t.Fatalf("store_status = %q, want %q -- an in-progress/reset sync_state row with no archived resources must not read as a completed sync", envelope.StoreStatus, "empty")
+	}
+	if envelope.NextStep == "" {
+		t.Fatal("next_step is empty; an agent reading this JSON has no path forward")
+	}
+}

@@ -1001,11 +1001,16 @@ func syncResource(ctx context.Context, c interface {
 
 	// Final sync state: clear cursor on natural completion, but preserve the
 	// resume cursor when an operator intentionally capped the page budget.
+	// SaveSyncStateCompleted (not the mid-loop SaveSyncState above) because
+	// this is the one call reached only by this function actually
+	// returning -- naturally or via an intentional --max-pages cap, never
+	// a crash -- so it's the correct place to mark the resource as having
+	// completed a real sync attempt (see HasSyncHistory's doc comment).
 	finalCursor := ""
 	if capExitHit {
 		finalCursor = capExitCursor
 	}
-	_ = db.SaveSyncState(resource, finalCursor, totalCount)
+	_ = db.SaveSyncStateCompleted(resource, finalCursor, totalCount)
 
 	// F4b symptom probe: if items were consumed and successfully
 	// extracted (extractFailures < consumed) but nothing landed in
