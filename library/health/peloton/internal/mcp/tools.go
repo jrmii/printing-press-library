@@ -61,7 +61,11 @@ const (
 // vocabulary already available in full via classes_filters (see
 // makeAPIHandlerStripFields's doc comment for why these must be stripped
 // rather than left for the shared MCP response trimmer to sort out).
-var rideArchivedRedundantFields = []string{"ride_types", "class_types"}
+// browse_categories/fitness_disciplines confirmed via live testing: fixed
+// per-call cost (a 15-entry list with several CDN image URLs each,
+// identical regardless of query) accounting for a measured ~23.4 KB of
+// fixed boilerplate on top of the already-stripped ride_types/class_types.
+var rideArchivedRedundantFields = []string{"ride_types", "class_types", "browse_categories", "fitness_disciplines"}
 
 // verboseFieldToggle pairs an opt-in MCP boolean argument with the field
 // names it controls. When the argument is absent or false,
@@ -85,20 +89,36 @@ type verboseFieldToggle struct {
 // information relevant to choosing a class, while dominating response size:
 // a 100-item classes_search result measured 454,819 bytes against a
 // 60,000-byte MCP tool budget (~4.5 KB/class), most of it these fields
-// repeated per class. Gated by the include_stream_urls MCP argument
-// (default: stripped).
+// repeated per class. live_stream_id/vod_stream_id and
+// user_caption_locales were found in a second round of live testing
+// (id counterparts to the already-listed *_url fields, and per-class
+// caption display names in four languages -- the locale codes a caller
+// would actually want are already present in the sibling "captions"
+// field, which this leaves untouched). Gated by the include_stream_urls
+// MCP argument (default: stripped).
 var classDetailStreamAndMediaFields = []string{
 	"vod_stream_url", "live_stream_url", "preview_stream_url",
 	"sample_vod_stream_url", "sample_preview_stream_url",
-	"join_tokens", "image_url",
+	"live_stream_id", "vod_stream_id",
+	"join_tokens", "image_url", "user_caption_locales",
 }
 
-// instructorBioFields are large instructor sub-fields confirmed via the same
-// live testing: a full bio, an ordered Q&A array, and a 12-entry
-// mostly-identical default Strava placeholder image array, repeated for
-// every instructor in a result set regardless of query. Gated by the
-// include_instructor_bios MCP argument (default: stripped).
-var instructorBioFields = []string{"bio", "short_bio", "ordered_q_and_as", "workout_share_images"}
+// instructorBioFields are large instructor sub-fields confirmed via live
+// testing: a full bio, background, quote, an ordered Q&A array, a 12-entry
+// mostly-identical default Strava placeholder image array, and (found in a
+// second round of live testing) music_bio plus eight portrait/hero/list
+// image URL fields -- all repeated in full for every instructor in a
+// result set regardless of query. Gated by the include_instructor_bios MCP
+// argument (default: stripped).
+var instructorBioFields = []string{
+	"bio", "short_bio", "background", "quote", "music_bio",
+	"ordered_q_and_as", "workout_share_images",
+	"about_image_url", "instructor_hero_image_url",
+	"jumbotron_url_dark", "jumbotron_url_ios", "life_style_image_url",
+	"ios_instructor_list_display_image_url",
+	"web_instructor_list_display_image_url",
+	"web_instructor_list_gif_image_url",
+}
 
 // classesVerboseToggles wires classDetailStreamAndMediaFields and
 // instructorBioFields to their MCP boolean arguments; shared by
@@ -219,8 +239,8 @@ func RegisterTools(s *server.MCPServer) {
 			mcplib.WithBoolean("has_workout", mcplib.Description("Optional tri-state filter: true for classes you've already taken, false for classes you haven't. Omitting the parameter leaves it unfiltered -- omitted and false are different queries.")),
 			mcplib.WithBoolean("is_favorite_ride", mcplib.Description("Optional tri-state filter: true for bookmarked classes, false for not-bookmarked. Omitting the parameter leaves it unfiltered -- omitted and false are different queries.")),
 			mcplib.WithString("select", mcplib.Description(selectParamDescriptionDataWrapped)),
-			mcplib.WithBoolean("include_stream_urls", mcplib.Description("Include per-class stream/playback URLs and join tokens. Default false: these carry no information relevant to choosing a class and dominate response size (measured ~4.5 KB/class with them included).")),
-			mcplib.WithBoolean("include_instructor_bios", mcplib.Description("Include each instructor's full bio, Q&A, and share-image array. Default false: these repeat in full for every instructor in the result set regardless of query.")),
+			mcplib.WithBoolean("include_stream_urls", mcplib.Description("Include per-class stream/playback URLs and IDs, join tokens, and caption locale display names. Default false: these carry no information relevant to choosing a class and dominate response size (measured ~4.5 KB/class with them included).")),
+			mcplib.WithBoolean("include_instructor_bios", mcplib.Description("Include each instructor's full bio, background, quote, Q&A, share-image array, and portrait/hero/list image URLs. Default false: these repeat in full for every instructor in the result set regardless of query.")),
 			mcplib.WithString("cursor", mcplib.Description("Opaque pagination cursor returned by a previous MCP response")),
 			mcplib.WithReadOnlyHintAnnotation(true),
 			mcplib.WithDestructiveHintAnnotation(false),
@@ -256,8 +276,8 @@ func RegisterTools(s *server.MCPServer) {
 			mcplib.WithBoolean("has_workout", mcplib.Description("Optional tri-state filter: true for classes you've already taken, false for classes you haven't. Omitting the parameter leaves it unfiltered -- omitted and false are different queries.")),
 			mcplib.WithBoolean("is_favorite_ride", mcplib.Description("Optional tri-state filter: true for bookmarked classes, false for not-bookmarked. Omitting the parameter leaves it unfiltered -- omitted and false are different queries.")),
 			mcplib.WithString("select", mcplib.Description(selectParamDescriptionDataWrapped)),
-			mcplib.WithBoolean("include_stream_urls", mcplib.Description("Include per-class stream/playback URLs and join tokens. Default false: these carry no information relevant to choosing a class and dominate response size (measured ~4.5 KB/class with them included).")),
-			mcplib.WithBoolean("include_instructor_bios", mcplib.Description("Include each instructor's full bio, Q&A, and share-image array. Default false: these repeat in full for every instructor in the result set regardless of query.")),
+			mcplib.WithBoolean("include_stream_urls", mcplib.Description("Include per-class stream/playback URLs and IDs, join tokens, and caption locale display names. Default false: these carry no information relevant to choosing a class and dominate response size (measured ~4.5 KB/class with them included).")),
+			mcplib.WithBoolean("include_instructor_bios", mcplib.Description("Include each instructor's full bio, background, quote, Q&A, share-image array, and portrait/hero/list image URLs. Default false: these repeat in full for every instructor in the result set regardless of query.")),
 			mcplib.WithString("cursor", mcplib.Description("Opaque pagination cursor returned by a previous MCP response")),
 			mcplib.WithReadOnlyHintAnnotation(true),
 			mcplib.WithDestructiveHintAnnotation(false),
@@ -270,8 +290,8 @@ func RegisterTools(s *server.MCPServer) {
 			mcplib.WithDescription("Show class metadata and supported planned structure. Required: ride_id. Optional: select, include_stream_urls, include_instructor_bios. Returns the ClassDetail."),
 			mcplib.WithString("ride_id", mcplib.Required(), mcplib.Description("Provider class identifier.")),
 			mcplib.WithString("select", mcplib.Description(selectParamDescription)),
-			mcplib.WithBoolean("include_stream_urls", mcplib.Description("Include stream/playback URLs and join tokens. Default false: these carry no information relevant to class metadata or structure and dominate response size.")),
-			mcplib.WithBoolean("include_instructor_bios", mcplib.Description("Include the instructor's full bio, Q&A, and share-image array. Default false.")),
+			mcplib.WithBoolean("include_stream_urls", mcplib.Description("Include stream/playback URLs and IDs, join tokens, and caption locale display names. Default false: these carry no information relevant to class metadata or structure and dominate response size.")),
+			mcplib.WithBoolean("include_instructor_bios", mcplib.Description("Include the instructor's full bio, background, quote, Q&A, share-image array, and portrait/hero/list image URLs. Default false.")),
 			mcplib.WithReadOnlyHintAnnotation(true),
 			mcplib.WithDestructiveHintAnnotation(false),
 			mcplib.WithOpenWorldHintAnnotation(true),
@@ -283,8 +303,8 @@ func RegisterTools(s *server.MCPServer) {
 			mcplib.WithDescription("Inspect ordered provider segments and target ranges without coaching labels. Required: ride_id. Optional: select, include_stream_urls, include_instructor_bios. Returns the ClassDetail."),
 			mcplib.WithString("ride_id", mcplib.Required(), mcplib.Description("Provider class identifier.")),
 			mcplib.WithString("select", mcplib.Description(selectParamDescription)),
-			mcplib.WithBoolean("include_stream_urls", mcplib.Description("Include stream/playback URLs and join tokens. Default false: these carry no information relevant to class metadata or structure and dominate response size.")),
-			mcplib.WithBoolean("include_instructor_bios", mcplib.Description("Include the instructor's full bio, Q&A, and share-image array. Default false.")),
+			mcplib.WithBoolean("include_stream_urls", mcplib.Description("Include stream/playback URLs and IDs, join tokens, and caption locale display names. Default false: these carry no information relevant to class metadata or structure and dominate response size.")),
+			mcplib.WithBoolean("include_instructor_bios", mcplib.Description("Include the instructor's full bio, background, quote, Q&A, share-image array, and portrait/hero/list image URLs. Default false.")),
 			mcplib.WithReadOnlyHintAnnotation(true),
 			mcplib.WithDestructiveHintAnnotation(false),
 			mcplib.WithOpenWorldHintAnnotation(true),

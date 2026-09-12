@@ -1238,6 +1238,98 @@ func TestApplyVerboseFieldTogglesEachOptInIsIndependent(t *testing.T) {
 	}
 }
 
+// TestClassesResponseStripsSecondRoundLiveConfirmedBloat guards a second
+// round of independent live testing after the first fix shipped: the
+// default response was still ~3.4x over the MCP tool budget, from fields
+// the first pass missed entirely. browse_categories/fitness_disciplines are
+// top-level catalog vocabulary (same category as the already-stripped
+// ride_types/class_types, ~23.4 KB of fixed per-call cost measured live);
+// the rest are per-class/per-instructor fields gated by the existing
+// verbose toggles, expanded to cover what live testing actually found in
+// the response.
+func TestClassesResponseStripsSecondRoundLiveConfirmedBloat(t *testing.T) {
+	fixture := json.RawMessage(`{
+		"data": [
+			{
+				"id": "1", "title": "Class One",
+				"live_stream_id": "ls-1", "vod_stream_id": "vs-1",
+				"user_caption_locales": [{"locale": "en-US", "display_name": "English"}]
+			}
+		],
+		"ride_types": [{"id": "rt1"}],
+		"class_types": [{"id": "ct1"}],
+		"browse_categories": [{"id": "cycling", "name": "Cycling", "icon_url": "https://example.test/icon.png"}],
+		"fitness_disciplines": [{"id": "cycling", "name": "Cycling"}],
+		"instructors": [
+			{
+				"id": "i1", "name": "Instructor One",
+				"background": "a long background", "quote": "a quote", "music_bio": "a music bio",
+				"about_image_url": "https://example.test/about.png",
+				"instructor_hero_image_url": "https://example.test/hero.png",
+				"jumbotron_url_dark": "https://example.test/jumbo-dark.png",
+				"jumbotron_url_ios": "https://example.test/jumbo-ios.png",
+				"life_style_image_url": "https://example.test/lifestyle.png",
+				"ios_instructor_list_display_image_url": "https://example.test/ios-list.png",
+				"web_instructor_list_display_image_url": "https://example.test/web-list.png",
+				"web_instructor_list_gif_image_url": "https://example.test/web-list.gif"
+			}
+		]
+	}`)
+
+	// rideArchivedRedundantFields is applied via stripTopLevelFields
+	// (top-level, unconditional), matching how classes_catalog/
+	// classes_search actually call it.
+	stripped := stripTopLevelFields(fixture, rideArchivedRedundantFields)
+	for _, wantAbsent := range []string{"ride_types", "class_types", "browse_categories", "fitness_disciplines"} {
+		if strings.Contains(string(stripped), wantAbsent) {
+			t.Fatalf("rideArchivedRedundantFields did not strip top-level %q: %s", wantAbsent, stripped)
+		}
+	}
+
+	stripped = applyVerboseFieldToggles(stripped, map[string]any{}, classesVerboseToggles)
+	for _, wantAbsent := range []string{
+		"live_stream_id", "vod_stream_id", "user_caption_locales",
+		"background", "\"quote\"", "music_bio",
+		"about_image_url", "instructor_hero_image_url", "jumbotron_url_dark", "jumbotron_url_ios",
+		"life_style_image_url", "ios_instructor_list_display_image_url",
+		"web_instructor_list_display_image_url", "web_instructor_list_gif_image_url",
+	} {
+		if strings.Contains(string(stripped), wantAbsent) {
+			t.Fatalf("default (unincluded) response still contains %q: %s", wantAbsent, stripped)
+		}
+	}
+	for _, wantPresent := range []string{"\"id\":\"1\"", "\"title\":\"Class One\"", "\"name\":\"Instructor One\""} {
+		if !strings.Contains(string(stripped), wantPresent) {
+			t.Fatalf("stripping removed a field it shouldn't have (missing %q): %s", wantPresent, stripped)
+		}
+	}
+
+	// include_stream_urls=true must restore the new stream-adjacent
+	// fields (live_stream_id/vod_stream_id/user_caption_locales) without
+	// restoring instructor bio fields.
+	streamRestored := applyVerboseFieldToggles(stripTopLevelFields(fixture, rideArchivedRedundantFields), map[string]any{"include_stream_urls": true}, classesVerboseToggles)
+	for _, want := range []string{"live_stream_id", "vod_stream_id", "user_caption_locales"} {
+		if !strings.Contains(string(streamRestored), want) {
+			t.Fatalf("include_stream_urls=true did not restore %q: %s", want, streamRestored)
+		}
+	}
+	if strings.Contains(string(streamRestored), "instructor_hero_image_url") {
+		t.Fatalf("include_stream_urls=true unexpectedly also restored an instructor bio field: %s", streamRestored)
+	}
+
+	// include_instructor_bios=true must restore the new instructor fields
+	// without restoring stream-adjacent fields.
+	biosRestored := applyVerboseFieldToggles(stripTopLevelFields(fixture, rideArchivedRedundantFields), map[string]any{"include_instructor_bios": true}, classesVerboseToggles)
+	for _, want := range []string{"background", "music_bio", "instructor_hero_image_url", "web_instructor_list_gif_image_url"} {
+		if !strings.Contains(string(biosRestored), want) {
+			t.Fatalf("include_instructor_bios=true did not restore %q: %s", want, biosRestored)
+		}
+	}
+	if strings.Contains(string(biosRestored), "live_stream_id") {
+		t.Fatalf("include_instructor_bios=true unexpectedly also restored a stream-adjacent field: %s", biosRestored)
+	}
+}
+
 // TestReservedMCPMetaArgsIncludesEveryVerboseToggle guards the other half of
 // the same review finding: include_stream_urls/include_instructor_bios are
 // MCP-only response-shaping arguments, not real Peloton API parameters, so
