@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "id": "workflow-status-structured-envelope",
+  "applied_at": "2026-09-11",
+  "base_run_id": "20260714-231159",
+  "base_printing_press_version": "4.28.0",
+  "summary": "workflow status's --json/--agent output (newWorkflowStatusCmd, internal/cli/channel_workflow.go) now builds a structured envelope via workflowStatusEnvelope -- {store_status, resources: {<name>: {count, last_synced_at?}}, total, store_path, next_step (only when empty)} -- instead of json-encoding the bare Status() map, which serialized to \"{}\" on an empty store. store.LastSyncedTimes() (internal/store/store.go) is the new per-resource last-synced accessor this draws from, reading sync_state the same way internal/cli's existing sync-hint helpers already do. Any future regen touching this command must keep the empty-store case returning store_status \"empty\" plus a next_step, matching the shape the \"search\" MCP tool already uses for the same situation.",
+  "reason": "Live-tested: workflow_status(plain=true) correctly said \"No archived data. Run 'workflow archive' to sync.\", but workflow_status(json=true) and workflow_status(agent=true) both returned a bare {}. The callers using --json/--agent are agents, so the mode that most needs a machine-readable answer was the one returning nothing actionable. search already returns {\"count\":0,\"store_status\":\"empty\",...} for the same situation, so workflow status should match that shape rather than leaving the JSON/agent case unfixed while plain-text worked.",
+  "files": [
+    "internal/cli/channel_workflow.go",
+    "internal/cli/channel_workflow_test.go",
+    "internal/store/store.go"
+  ],
+  "validated_outcome": "go build/vet/test/govulncheck and verify_skill.py all green. New tests: TestWorkflowStatusJSONReturnsStructuredEnvelopeWhenEmpty drives the real `workflow status --json` command against a never-synced store and asserts store_status=\"empty\", an empty resources map, and a non-empty next_step (not a bare {}); TestWorkflowStatusJSONIncludesCountsAndLastSyncedAt archives real data first (reusing the existing fake-server harness from TestWorkflowArchiveActuallyArchivesData), then asserts store_status=\"ready\", a workouts entry with count>0 and a non-empty last_synced_at, and a non-zero total."
+}

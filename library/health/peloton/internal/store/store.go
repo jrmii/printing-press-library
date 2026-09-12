@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"math"
@@ -1933,6 +1934,49 @@ func (s *Store) Status() (map[string]int, error) {
 		status[rt] = count
 	}
 	return status, rows.Err()
+}
+
+// LastSyncedTimes returns the most recent last_synced_at per resource_type
+// from sync_state, keyed the same as Status()'s resource_type keys. A
+// resource with a NULL last_synced_at (recorded but never completed a sync)
+// or with no sync_state row at all is simply absent from the returned map --
+// callers should treat a missing key as "never synced" rather than an error.
+func (s *Store) LastSyncedTimes() (map[string]time.Time, error) {
+	rows, err := s.db.Query(
+		`SELECT resource_type, last_synced_at FROM sync_state WHERE last_synced_at IS NOT NULL`,
+	)
+	if err != nil {
+		if syncStateMissingTable(err) {
+			return map[string]time.Time{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+
+	times := make(map[string]time.Time)
+	for rows.Next() {
+		var rt string
+		var syncedAt time.Time
+		if err := rows.Scan(&rt, &syncedAt); err != nil {
+			return nil, err
+		}
+		times[rt] = syncedAt
+	}
+	return times, rows.Err()
+}
+
+// syncStateMissingTable reports whether err is sqlite's "no such table"
+// error for a store opened before sync_state existed. Matches the same
+// pattern internal/cli's syncHintMissingTable uses for the identical
+// backward-compatibility concern.
+func syncStateMissingTable(err error) bool {
+	for err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return true
+		}
+		err = errors.Unwrap(err)
+	}
+	return false
 }
 
 // CascadeJunction names a junction table + the FK column referencing the
