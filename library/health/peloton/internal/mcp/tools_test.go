@@ -815,6 +815,58 @@ func TestStripTopLevelFieldsRemovesRedundantCatalogVocabulary(t *testing.T) {
 	}
 }
 
+// TestMCPToolPageResultTextArrayFieldHintHandlesResidualInstructorsArray
+// guards the live-tested Issue 10 fix: even after rideArchivedRedundantFields
+// strips ride_types/class_types/browse_categories/fitness_disciplines, a
+// real classes_catalog/classes_search response still carries a sibling
+// "instructors" array alongside "data" (unconditionally -- it isn't gated
+// by any toggle), so bound.go's auto-detecting single-array trimmer still
+// bails to a raw, non-resumable preview for any unprojected call large
+// enough to need trimming. classes_catalog/classes_search set
+// mcpPageConfig.ArrayField ("data") precisely so mcpToolPageResultText (the
+// function their real handler calls, since they always configure a
+// CursorParam) skips that ambiguous auto-detection and returns a proper
+// resumable envelope instead -- matching the better outcome a select-projected
+// call got only as an accidental side effect of select happening to drop
+// the "instructors" field.
+func TestMCPToolPageResultTextArrayFieldHintHandlesResidualInstructorsArray(t *testing.T) {
+	data := make([]map[string]string, 0, bound.MaxItems+25)
+	for i := 0; i < bound.MaxItems+25; i++ {
+		data = append(data, map[string]string{
+			"id": strings.Repeat("d", 8), "title": strings.Repeat("verbose class title ", 90),
+		})
+	}
+	instructors := make([]map[string]string, 0, 35)
+	for i := 0; i < 35; i++ {
+		instructors = append(instructors, map[string]string{"id": strings.Repeat("i", 8), "name": strings.Repeat("instructor name ", 5)})
+	}
+	fixture, err := json.Marshal(map[string]any{"data": data, "instructors": instructors})
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+
+	pageConfig := mcpPageConfig{CursorParam: "page", ArrayField: "data"}
+	text := mcpTextContent(t, mcpToolPageResultText("GET", fixture, pageConfig, ""))
+
+	var envelope struct {
+		Data       []json.RawMessage `json:"data"`
+		Truncated  bool              `json:"truncated"`
+		NextCursor string            `json:"next_cursor"`
+	}
+	if err := json.Unmarshal([]byte(text), &envelope); err != nil {
+		t.Fatalf("bounded page result must remain valid JSON: %v\n%s", err, text)
+	}
+	if !envelope.Truncated {
+		t.Fatalf("expected truncation given %d oversized classes: %s", len(data), text)
+	}
+	if envelope.NextCursor == "" {
+		t.Fatalf("ArrayField hint should make this resumable despite the sibling instructors array, not a dead-end preview: %s", text)
+	}
+	if len(envelope.Data) == 0 {
+		t.Fatalf("expected real class records under \"data\": %s", text)
+	}
+}
+
 // TestStripTopLevelFieldsIsNoOpWhenFieldsAbsentOrNotAnObject guards the
 // helper's safety contract: it must never alter a payload with none of the
 // named fields, and must never panic or corrupt a payload that isn't a JSON
@@ -1430,6 +1482,84 @@ func TestInstructorBioFieldsCoversThirdRoundLiveConfirmedFields(t *testing.T) {
 	}
 }
 
+// TestClassAlwaysStripFieldsCoversFourthRoundConstantAndDerivableFields
+// guards a fourth round of independent live testing: a further set of
+// per-class fields confirmed constant (rating, flags,
+// total_following_workouts, sold_out, free_for_limited_time) or derivable
+// from/redundant with a kept sibling (fitness_discipline_display_name,
+// captions, scheduled_start_time, alongside the kept fitness_discipline and
+// original_air_time). Like the third-round additions, no argument restores
+// these.
+func TestClassAlwaysStripFieldsCoversFourthRoundConstantAndDerivableFields(t *testing.T) {
+	fixture := json.RawMessage(`{
+		"data": [
+			{
+				"id": "1", "title": "Class One",
+				"rating": 0, "flags": [], "total_following_workouts": 0,
+				"fitness_discipline": "cycling", "fitness_discipline_display_name": "Cycling",
+				"captions": [{"locale": "en-US"}], "has_closed_captions": true,
+				"original_air_time": 1700000000, "scheduled_start_time": 1700000003,
+				"sold_out": false, "free_for_limited_time": false
+			}
+		]
+	}`)
+
+	stripped := deepStripFields(fixture, classAlwaysStripFields)
+	strippedText := string(stripped)
+	for _, wantAbsent := range []string{
+		"rating", "\"flags\"", "total_following_workouts",
+		"fitness_discipline_display_name", "captions", "scheduled_start_time",
+		"sold_out", "free_for_limited_time",
+	} {
+		if strings.Contains(strippedText, "\""+strings.Trim(wantAbsent, "\"")+"\"") {
+			t.Fatalf("classAlwaysStripFields did not strip %s: %s", wantAbsent, strippedText)
+		}
+	}
+	for _, wantPresent := range []string{"\"id\":\"1\"", "fitness_discipline\":\"cycling\"", "has_closed_captions", "original_air_time"} {
+		if !strings.Contains(strippedText, wantPresent) {
+			t.Fatalf("classAlwaysStripFields removed a field it shouldn't have (missing %q): %s", wantPresent, strippedText)
+		}
+	}
+}
+
+// TestClassesVerboseTogglesIncludeFlagsExcludesIsFavorite guards the fourth
+// opt-in category found by the same round of live testing: a block of
+// is_*/has_* boolean fields with no selection value, gated by
+// include_flags. is_favorite is deliberately excluded from
+// classBooleanFlagFields (it's the one flag with real selection value) so
+// it must survive both with and without include_flags set.
+func TestClassesVerboseTogglesIncludeFlagsExcludesIsFavorite(t *testing.T) {
+	fixture := json.RawMessage(`{
+		"data": [
+			{
+				"id": "1", "title": "Class One",
+				"is_favorite": true, "is_archived": false,
+				"has_closed_captions": true, "has_pedaling_metrics": true
+			}
+		]
+	}`)
+
+	stripped := applyVerboseFieldToggles(fixture, map[string]any{}, classesVerboseToggles)
+	for _, wantAbsent := range classBooleanFlagFields {
+		if strings.Contains(string(stripped), "\""+wantAbsent+"\"") {
+			t.Fatalf("default (unincluded) response still contains %q: %s", wantAbsent, stripped)
+		}
+	}
+	if !strings.Contains(string(stripped), `"is_favorite":true`) {
+		t.Fatalf("is_favorite must survive stripping unconditionally: %s", stripped)
+	}
+
+	restored := applyVerboseFieldToggles(fixture, map[string]any{"include_flags": true}, classesVerboseToggles)
+	for _, want := range []string{"is_archived", "has_closed_captions", "has_pedaling_metrics"} {
+		if !strings.Contains(string(restored), want) {
+			t.Fatalf("include_flags=true did not restore %q: %s", want, restored)
+		}
+	}
+	if !strings.Contains(string(restored), `"is_favorite":true`) {
+		t.Fatalf("is_favorite must still be present with include_flags=true: %s", restored)
+	}
+}
+
 // TestReservedMCPMetaArgsIncludesEveryVerboseToggle guards the other half of
 // the same review finding: include_stream_urls/include_instructor_bios are
 // MCP-only response-shaping arguments, not real Peloton API parameters, so
@@ -1467,6 +1597,7 @@ func TestClassesCatalogAndSearchDeclareSelectAndVerboseToggles(t *testing.T) {
 		"include_stream_urls":     "boolean",
 		"include_instructor_bios": "boolean",
 		"include_internal_ids":    "boolean",
+		"include_flags":           "boolean",
 	}
 	for _, toolName := range []string{"classes_catalog", "classes_search", "classes_show", "classes_structure"} {
 		tool, ok := tools[toolName]

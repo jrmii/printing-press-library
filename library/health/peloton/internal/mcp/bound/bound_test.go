@@ -261,6 +261,61 @@ func TestEndpointPageResponseMultiArrayObjectUsesNonResumablePreview(t *testing.
 	}
 }
 
+// TestEndpointPageResponseArrayFieldHintSurvivesASiblingArray guards the
+// live-tested fix for Issue 10: classes_catalog/classes_search's real
+// response always carries a sibling "instructors" array alongside "data",
+// regardless of query. Auto-detection (proven by
+// TestEndpointPageResponseMultiArrayObjectUsesNonResumablePreview) bails to
+// a non-resumable preview as soon as it sees that second top-level array --
+// which meant every sufficiently large *unprojected* call on these
+// endpoints got a preview a caller couldn't page through, while a
+// projected call (whose select projection happens to drop every field but
+// "data") took the better, resumable envelope path purely as a side effect
+// of removing "instructors" from the response. Setting PageOptions.ArrayField
+// names the real item field directly, skipping the ambiguous scan, so an
+// unprojected response becomes just as resumable as a projected one.
+func TestEndpointPageResponseArrayFieldHintSurvivesASiblingArray(t *testing.T) {
+	data := make([]map[string]string, 0, MaxItems+25)
+	instructors := make([]map[string]string, 0, 30)
+	for i := 0; i < MaxItems+25; i++ {
+		data = append(data, map[string]string{"id": "class-" + strconv.Itoa(i), "payload": strings.Repeat("x", 1600)})
+	}
+	for i := 0; i < 30; i++ {
+		instructors = append(instructors, map[string]string{"id": "instructor-" + strconv.Itoa(i), "name": strings.Repeat("y", 200)})
+	}
+	fixture, err := json.Marshal(map[string]any{
+		"data":        data,
+		"instructors": instructors,
+	})
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+
+	text := EndpointPageResponse("GET", fixture, PageOptions{CursorParam: "page", ArrayField: "data"})
+	if len(text) > MaxBytes {
+		t.Fatalf("bounded result length = %d, want <= %d", len(text), MaxBytes)
+	}
+
+	var envelope struct {
+		Data          []map[string]string `json:"data"`
+		Truncated     bool                `json:"truncated"`
+		NextCursor    string              `json:"next_cursor"`
+		ReturnedCount int                 `json:"returned_count"`
+	}
+	if err := json.Unmarshal([]byte(text), &envelope); err != nil {
+		t.Fatalf("bounded page result must remain valid JSON: %v\n%s", err, text)
+	}
+	if !envelope.Truncated {
+		t.Fatalf("expected truncation given %d items over the byte budget: %s", len(data), text)
+	}
+	if envelope.NextCursor == "" {
+		t.Fatalf("ArrayField hint should still produce a resumable next_cursor, not a dead-end preview: %s", text)
+	}
+	if envelope.ReturnedCount == 0 || len(envelope.Data) != envelope.ReturnedCount {
+		t.Fatalf("expected real items under \"data\" matching returned_count, got %d items, returned_count=%d: %s", len(envelope.Data), envelope.ReturnedCount, text)
+	}
+}
+
 func TestEndpointResponseTruncatedByItemLimitDoesNotClaimByteOverflow(t *testing.T) {
 	items := make([]string, 0, MaxItems+1)
 	for i := 0; i < MaxItems+1; i++ {

@@ -34,6 +34,20 @@ type PageOptions struct {
 	Cursor         string
 	CursorParam    string
 	NextCursorPath string
+
+	// ArrayField, when set, names the top-level response key holding the
+	// list of items directly rather than relying on boundedSingleArrayPageObject's
+	// auto-detection (scan for the one-and-only top-level array field).
+	// Auto-detection bails (falls back to an unparsable, unresumable preview
+	// envelope) as soon as a second top-level array field is present -- live
+	// testing found this on classes_catalog/classes_search's real response
+	// shape, which always carries a sibling "instructors" array alongside
+	// "data" regardless of query. Callers that already know their response
+	// envelope's item field (from the spec's response_path, the same source
+	// selectParamDescriptionDataWrapped's "data." prefix advice comes from)
+	// should set this so an oversized unprojected response still becomes a
+	// resumable, paginable envelope instead of a raw unparsable preview.
+	ArrayField string
 }
 
 type endpointCursor struct {
@@ -205,6 +219,32 @@ func boundedSingleArrayPageObject(data json.RawMessage, opts PageOptions) ([]byt
 	if json.Unmarshal(data, &obj) != nil {
 		return nil, false
 	}
+	arrayField, items, ok := resolveArrayField(obj, opts.ArrayField)
+	if !ok {
+		return nil, false
+	}
+	nextUpstream := extractStringPath(data, opts.NextCursorPath)
+	return boundedPageListEnvelope(arrayField, items, data, endpointListNote, opts, obj, nextUpstream), true
+}
+
+// resolveArrayField picks the object's items array. When field is non-empty
+// it's used directly (still validated as present and array-shaped) rather
+// than falling back to the auto-detect scan, which bails as soon as a
+// second top-level array field is present -- see PageOptions.ArrayField's
+// doc comment for why that matters for classes_catalog/classes_search's
+// real response shape.
+func resolveArrayField(obj map[string]json.RawMessage, field string) (string, []json.RawMessage, bool) {
+	if field != "" {
+		raw, present := obj[field]
+		if !present {
+			return "", nil, false
+		}
+		var items []json.RawMessage
+		if json.Unmarshal(raw, &items) != nil {
+			return "", nil, false
+		}
+		return field, items, true
+	}
 	arrayField := ""
 	var items []json.RawMessage
 	for key, raw := range obj {
@@ -217,16 +257,15 @@ func boundedSingleArrayPageObject(data json.RawMessage, opts PageOptions) ([]byt
 			continue
 		}
 		if arrayField != "" {
-			return nil, false
+			return "", nil, false
 		}
 		arrayField = key
 		items = candidate
 	}
 	if arrayField == "" {
-		return nil, false
+		return "", nil, false
 	}
-	nextUpstream := extractStringPath(data, opts.NextCursorPath)
-	return boundedPageListEnvelope(arrayField, items, data, endpointListNote, opts, obj, nextUpstream), true
+	return arrayField, items, true
 }
 
 func boundedListEnvelope(field string, items []json.RawMessage, originalBytes int, note string) []byte {
