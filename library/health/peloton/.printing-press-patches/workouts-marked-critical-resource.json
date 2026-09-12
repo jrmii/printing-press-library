@@ -10,5 +10,5 @@
     "internal/cli/sync.go",
     "internal/cli/sync_hint_test.go"
   ],
-  "validated_outcome": "go build/vet/test/govulncheck and verify_skill.py all green. New test TestWorkoutsIsMarkedCriticalForSyncExitCode guards criticalResources[\"workouts\"] == true directly; the actual exit-code branch that consumes it (sync's RunE closure) has no prior unit-test harness in this codebase to extend without a larger, out-of-scope refactor, so this is a direct regression guard on the map value rather than a full end-to-end exit-code test."
+  "validated_outcome": "go build/vet/test/govulncheck and verify_skill.py all green. TestWorkoutsIsMarkedCriticalForSyncExitCode guards criticalResources[\"workouts\"] == true directly; TestSyncFailedWorkoutsExitsNonZero drives the real sync command end-to-end against a fake server with a failing workouts request and a succeeding classes request, asserting a non-zero exit naming workouts as the critical failure while classes still synced."
 }
