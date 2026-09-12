@@ -14,15 +14,17 @@ import (
 	"github.com/mvanhorn/printing-press-library/library/health/peloton/internal/cliutil"
 )
 
+func intPtr(v int) *int { return &v }
+
 // TestSyncCompleteEventJSONFieldsAndOmitEmpty guards the pure event-shape
 // contract syncCompleteEventJSON exists to provide: "total" (this call's
 // count) is unchanged from the prior raw fmt.Sprintf shape so an existing
-// consumer sees no behavior change, "store_total" is always present, and
-// "resume_cursor" is present only when non-empty (a natural-completion call
-// has nothing to resume, so the field should disappear rather than
+// consumer sees no behavior change, "store_total" is present when known,
+// and "resume_cursor" is present only when non-empty (a natural-completion
+// call has nothing to resume, so the field should disappear rather than
 // serialize as an empty string every time).
 func TestSyncCompleteEventJSONFieldsAndOmitEmpty(t *testing.T) {
-	naturalCompletion := syncCompleteEventJSON("classes", 100, 500, "", 1234)
+	naturalCompletion := syncCompleteEventJSON("classes", 100, intPtr(500), "", 1234)
 	var obj map[string]any
 	if err := json.Unmarshal([]byte(naturalCompletion), &obj); err != nil {
 		t.Fatalf("event is not valid JSON: %v\n%s", err, naturalCompletion)
@@ -40,9 +42,26 @@ func TestSyncCompleteEventJSONFieldsAndOmitEmpty(t *testing.T) {
 		t.Fatalf("resume_cursor present on a natural-completion event, want omitted: %s", naturalCompletion)
 	}
 
-	capped := syncCompleteEventJSON("classes", 100, 100, "opaque-cursor-value", 1234)
+	capped := syncCompleteEventJSON("classes", 100, intPtr(100), "opaque-cursor-value", 1234)
 	if !strings.Contains(capped, `"resume_cursor":"opaque-cursor-value"`) {
 		t.Fatalf("resume_cursor missing or wrong on a capped completion event: %s", capped)
+	}
+}
+
+// TestSyncCompleteEventJSONOmitsStoreTotalWhenNil guards a review finding:
+// a failed db.Count(resource) (e.g. another sync worker briefly locking the
+// store) used to be discarded and reported as store_total 0 -- reading as
+// "the store just lost everything" to a caller comparing store_total across
+// calls, a worse outcome than not having the cumulative count at all. nil
+// must omit the field, not serialize a false zero.
+func TestSyncCompleteEventJSONOmitsStoreTotalWhenNil(t *testing.T) {
+	event := syncCompleteEventJSON("classes", 100, nil, "", 1234)
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(event), &obj); err != nil {
+		t.Fatalf("event is not valid JSON: %v\n%s", err, event)
+	}
+	if _, ok := obj["store_total"]; ok {
+		t.Fatalf("store_total present with a nil pointer, want omitted so it can't be mistaken for a real zero: %s", event)
 	}
 }
 

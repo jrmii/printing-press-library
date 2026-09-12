@@ -255,12 +255,20 @@ func syncWarningJSON(resource, parent string, status int, reason, message string
 // resume_cursor (empty string on natural completion, non-empty when a
 // --max-pages cap left a resumable position) are new fields that give a
 // caller the cumulative signal "total" alone can't.
-func syncCompleteEventJSON(resource string, total, storeTotal int, resumeCursor string, durationMs int64) string {
+// syncCompleteEventJSON's storeTotal is a pointer, not a bare int: the
+// caller (syncResource) reads it via db.Count(resource), which can itself
+// fail (e.g. another sync worker holding a transient lock on the store).
+// Discarding that error and publishing storeTotal 0 would read as "the
+// store just lost all its data" to a caller comparing store_total across
+// calls -- a worse outcome than the missing-cumulative-count bug this field
+// exists to fix. nil omits the field entirely so a caller can tell
+// "unavailable this call" from "genuinely zero."
+func syncCompleteEventJSON(resource string, total int, storeTotal *int, resumeCursor string, durationMs int64) string {
 	payload := struct {
 		Event        string `json:"event"`
 		Resource     string `json:"resource"`
 		Total        int    `json:"total"`
-		StoreTotal   int    `json:"store_total"`
+		StoreTotal   *int   `json:"store_total,omitempty"`
 		ResumeCursor string `json:"resume_cursor,omitempty"`
 		DurationMs   int64  `json:"duration_ms"`
 	}{
