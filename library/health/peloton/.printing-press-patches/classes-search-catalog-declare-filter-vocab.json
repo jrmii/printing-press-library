@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "id": "classes-search-catalog-declare-filter-vocab",
+  "applied_at": "2026-09-11",
+  "base_run_id": "20260714-231159",
+  "base_printing_press_version": "4.28.0",
+  "summary": "classes_search and classes_catalog's MCP tool schemas (internal/mcp/tools.go) now declare duration, super_genre_id, has_workout, and is_favorite_ride -- the same tri-state-aware bindings pattern (no Default) already used for the original params, so omitted/true/false stay three distinct queries for the two boolean filters. makeAPIHandlerStripFields's raw-argument passthrough (any arg not a path param or declared binding forwards straight to the live API, unvalidated) is unchanged and still exists for provider filters that remain undeclared; it now also logs the undeclared argument names to stderr via logUndeclaredArgs/undeclaredArgNames so a misspelled filter isn't a silent, invisible no-op. Any future regen of this endpoint pair must keep these four bindings declared (matching classes_filters' advertised vocabulary) and keep the stderr logging wired into makeAPIHandlerStripFields's forwarding loop.",
+  "reason": "Live-tested against a deployed instance with control queries: classes_filters(browse_category=\"cycling\") advertises duration/super_genre_id/has_workout/is_favorite_ride as real filters, and classes_search already forwarded them to Peloton's API correctly (duration=1800+has_workout=false -> 6,950 results; duration=1800+has_workout=true -> 94 results; 6,950+94=7,044 = all 30-minute cycling video classes, exact partition, no overlap) via the existing raw-argument-passthrough escape hatch. The gap was documentation/discoverability, not plumbing: an agent reading the tool schema had no way to learn these filters existed, so it fell back to a local-store hydration path that shouldn't have been necessary for a single filtered upstream call. Declaring them closes that discovery gap; the added stderr logging addresses the accompanying risk that a typo'd raw param (e.g. duratoin=1800) silently returns unfiltered results with a plausible-looking total instead of erroring.",
+  "files": [
+    "internal/mcp/tools.go",
+    "internal/mcp/tools_test.go"
+  ],
+  "validated_outcome": "go build/vet/test/govulncheck and verify_skill.py all green. New tests: TestClassesSearchAndCatalogDeclareFilterVocabularyParams asserts both tool schemas declare all four params with the correct JSON Schema types; TestUndeclaredArgNamesExcludesPathAndDeclaredParams and TestUndeclaredArgNamesEmptyWhenEverythingIsRecognized cover the pure classification helper directly; TestLogUndeclaredArgsWritesToStderrNotStdout and TestLogUndeclaredArgsIsSilentWhenNothingIsUndeclared confirm the new logging fires only for genuinely undeclared args and never touches stdout (which carries MCP protocol frames on the stdio transport)."
+}

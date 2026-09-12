@@ -6,6 +6,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -937,5 +939,138 @@ func TestNewMCPClientAppliesManagedAuth(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bootstrap credentials are unavailable") {
 		t.Fatalf("newMCPClient error = %q, want it to come from the managed-auth bootstrap check specifically", err.Error())
+	}
+}
+
+// TestClassesSearchAndCatalogDeclareFilterVocabularyParams guards a live-tested
+// fix: classes_filters(browse_category="cycling") advertises duration,
+// super_genre_id, has_workout, and is_favorite_ride as real, working provider
+// filters (confirmed against the live API with control queries -- e.g.
+// duration=1800+has_workout=false and duration=1800+has_workout=true partition
+// exactly, 6,950 + 94 = 7,044 = all 30-minute cycling video classes), but
+// classes_search/classes_catalog's tool schemas previously declared none of
+// them, so a caller reading the schema would conclude the filter didn't exist.
+// Passing them anyway already worked via makeAPIHandlerStripFields's raw
+// argument passthrough; this test guards that they are now declared with the
+// right JSON Schema types so an MCP client's tool introspection surfaces them.
+func TestClassesSearchAndCatalogDeclareFilterVocabularyParams(t *testing.T) {
+	s := server.NewMCPServer("peloton", "test")
+	RegisterTools(s)
+	tools := s.ListTools()
+
+	wantTypes := map[string]string{
+		"duration":         "number",
+		"super_genre_id":   "string",
+		"has_workout":      "boolean",
+		"is_favorite_ride": "boolean",
+	}
+
+	for _, toolName := range []string{"classes_search", "classes_catalog"} {
+		tool, ok := tools[toolName]
+		if !ok {
+			t.Fatalf("%s tool missing from registered tools", toolName)
+		}
+		for param, wantType := range wantTypes {
+			schema, ok := tool.Tool.InputSchema.Properties[param].(map[string]any)
+			if !ok {
+				t.Fatalf("%s tool schema does not declare %q: %#v", toolName, param, tool.Tool.InputSchema.Properties)
+			}
+			if gotType, _ := schema["type"].(string); gotType != wantType {
+				t.Fatalf("%s tool schema declares %q as type %q, want %q", toolName, param, gotType, wantType)
+			}
+		}
+	}
+}
+
+// TestUndeclaredArgNamesExcludesPathAndDeclaredParams guards the pure
+// classification logic makeAPIHandlerStripFields uses to decide which
+// arguments count as "undeclared" (forwarded raw to the live API, and logged
+// to stderr): path params and declared bindings must never be reported as
+// undeclared, only genuinely unrecognized argument names -- and the result
+// must be sorted, since it feeds directly into a human-readable log line.
+func TestUndeclaredArgNamesExcludesPathAndDeclaredParams(t *testing.T) {
+	args := map[string]any{
+		"ride_id":  "abc123",
+		"limit":    float64(10),
+		"duratoin": float64(1800), // deliberate typo, the case this exists to catch
+		"another":  "value",
+	}
+	pathParams := map[string]bool{"ride_id": true}
+	knownArgs := map[string]bool{"ride_id": true, "limit": true}
+
+	got := undeclaredArgNames(args, pathParams, knownArgs)
+	want := []string{"another", "duratoin"}
+	if len(got) != len(want) {
+		t.Fatalf("undeclaredArgNames = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("undeclaredArgNames = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestUndeclaredArgNamesEmptyWhenEverythingIsRecognized guards against a
+// false-positive log line firing on ordinary, fully-declared tool calls.
+func TestUndeclaredArgNamesEmptyWhenEverythingIsRecognized(t *testing.T) {
+	args := map[string]any{"browse_category": "cycling", "duration": float64(1800)}
+	knownArgs := map[string]bool{"browse_category": true, "duration": true}
+	if got := undeclaredArgNames(args, map[string]bool{}, knownArgs); len(got) != 0 {
+		t.Fatalf("undeclaredArgNames = %v, want empty", got)
+	}
+}
+
+// TestLogUndeclaredArgsWritesToStderrNotStdout guards the transport-safety
+// requirement: the stdio MCP transport uses stdout for protocol frames, so a
+// diagnostic log line must go to stderr only, or it would corrupt the
+// protocol stream from the caller's perspective.
+func TestLogUndeclaredArgsWritesToStderrNotStdout(t *testing.T) {
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = origStderr }()
+
+	logUndeclaredArgs("/api/v2/ride/archived", map[string]any{"duratoin": float64(1800)}, map[string]bool{}, map[string]bool{})
+
+	_ = w.Close()
+	os.Stderr = origStderr
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(out)
+	for _, want := range []string{"/api/v2/ride/archived", "duratoin"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stderr log %q missing %q", text, want)
+		}
+	}
+}
+
+// TestLogUndeclaredArgsIsSilentWhenNothingIsUndeclared guards against noisy
+// logging on the common case: every declared/typed tool call should produce
+// no stderr output at all.
+func TestLogUndeclaredArgsIsSilentWhenNothingIsUndeclared(t *testing.T) {
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = origStderr }()
+
+	logUndeclaredArgs("/api/v2/ride/archived", map[string]any{"duration": float64(1800)}, map[string]bool{}, map[string]bool{"duration": true})
+
+	_ = w.Close()
+	os.Stderr = origStderr
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 0 {
+		t.Fatalf("expected no stderr output for a fully-declared call, got %q", out)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -60,7 +61,7 @@ func RegisterTools(s *server.MCPServer) {
 	)
 	s.AddTool(
 		mcplib.NewTool("classes_catalog",
-			mcplib.WithDescription("List a caller-scoped archived class catalog page. Required: browse_category, content_format. Optional: limit (default: 100), cursor, sort_by (default: original_air_time) (plus 3 more). Returns array of Class."),
+			mcplib.WithDescription("List a caller-scoped archived class catalog page. Required: browse_category, content_format. Optional: limit (default: 100), cursor, sort_by (default: original_air_time) (plus 7 more). Returns array of Class."),
 			mcplib.WithString("browse_category", mcplib.Required(), mcplib.Description("Required catalog category.")),
 			mcplib.WithString("content_format", mcplib.Required(), mcplib.Description("Required provider content format.")),
 			mcplib.WithNumber("limit", mcplib.Description("Maximum records per page.")),
@@ -68,12 +69,16 @@ func RegisterTools(s *server.MCPServer) {
 			mcplib.WithBoolean("desc", mcplib.Description("Sort descending.")),
 			mcplib.WithString("instructor_id", mcplib.Description("Optional embedded-instructor filter.")),
 			mcplib.WithString("class_type_id", mcplib.Description("Optional provider class-type filter.")),
+			mcplib.WithNumber("duration", mcplib.Description("Optional provider class-length filter, in seconds (e.g. 1800 for 30 minutes). Accepted values are advertised by classes_filters.")),
+			mcplib.WithString("super_genre_id", mcplib.Description("Optional provider music-genre filter. Accepted values are advertised by classes_filters.")),
+			mcplib.WithBoolean("has_workout", mcplib.Description("Optional tri-state filter: true for classes you've already taken, false for classes you haven't. Omitting the parameter leaves it unfiltered -- omitted and false are different queries.")),
+			mcplib.WithBoolean("is_favorite_ride", mcplib.Description("Optional tri-state filter: true for bookmarked classes, false for not-bookmarked. Omitting the parameter leaves it unfiltered -- omitted and false are different queries.")),
 			mcplib.WithString("cursor", mcplib.Description("Opaque pagination cursor returned by a previous MCP response")),
 			mcplib.WithReadOnlyHintAnnotation(true),
 			mcplib.WithDestructiveHintAnnotation(false),
 			mcplib.WithOpenWorldHintAnnotation(true),
 		),
-		makeAPIHandlerStripFields("GET", "/api/v2/ride/archived", true, false, nil, mcpPageConfig{CursorParam: "page", NextCursorPath: ""}, []mcpParamBinding{{PublicName: "browse_category", WireName: "browse_category", Location: "query"}, {PublicName: "content_format", WireName: "content_format", Location: "query"}, {PublicName: "limit", WireName: "limit", Location: "query", Default: "100"}, {PublicName: "sort_by", WireName: "sort_by", Location: "query", Default: "original_air_time"}, {PublicName: "desc", WireName: "desc", Location: "query", Default: "true"}, {PublicName: "instructor_id", WireName: "instructor_id", Location: "query"}, {PublicName: "class_type_id", WireName: "class_type_id", Location: "query"}}, []string{}, rideArchivedRedundantFields),
+		makeAPIHandlerStripFields("GET", "/api/v2/ride/archived", true, false, nil, mcpPageConfig{CursorParam: "page", NextCursorPath: ""}, []mcpParamBinding{{PublicName: "browse_category", WireName: "browse_category", Location: "query"}, {PublicName: "content_format", WireName: "content_format", Location: "query"}, {PublicName: "limit", WireName: "limit", Location: "query", Default: "100"}, {PublicName: "sort_by", WireName: "sort_by", Location: "query", Default: "original_air_time"}, {PublicName: "desc", WireName: "desc", Location: "query", Default: "true"}, {PublicName: "instructor_id", WireName: "instructor_id", Location: "query"}, {PublicName: "class_type_id", WireName: "class_type_id", Location: "query"}, {PublicName: "duration", WireName: "duration", Location: "query"}, {PublicName: "super_genre_id", WireName: "super_genre_id", Location: "query"}, {PublicName: "has_workout", WireName: "has_workout", Location: "query"}, {PublicName: "is_favorite_ride", WireName: "is_favorite_ride", Location: "query"}}, []string{}, rideArchivedRedundantFields),
 	)
 	s.AddTool(
 		mcplib.NewTool("classes_filters",
@@ -89,7 +94,7 @@ func RegisterTools(s *server.MCPServer) {
 	)
 	s.AddTool(
 		mcplib.NewTool("classes_search",
-			mcplib.WithDescription("Search the caller-scoped catalog by factual provider filters; U4 adds offline structural predicates. Required: browse_category, content_format. Optional: limit (default: 100), cursor, sort_by (default: original_air_time) (plus 3 more). Returns array of Class."),
+			mcplib.WithDescription("Search the caller-scoped catalog by factual provider filters; U4 adds offline structural predicates. Required: browse_category, content_format. Optional: limit (default: 100), cursor, sort_by (default: original_air_time) (plus 7 more). Returns array of Class."),
 			mcplib.WithString("browse_category", mcplib.Required(), mcplib.Description("Required catalog category.")),
 			mcplib.WithString("content_format", mcplib.Required(), mcplib.Description("Required provider content format.")),
 			mcplib.WithNumber("limit", mcplib.Description("Maximum records per page.")),
@@ -97,12 +102,16 @@ func RegisterTools(s *server.MCPServer) {
 			mcplib.WithBoolean("desc", mcplib.Description("Sort descending.")),
 			mcplib.WithString("instructor_id", mcplib.Description("Optional embedded-instructor filter.")),
 			mcplib.WithString("class_type_id", mcplib.Description("Optional provider class-type filter.")),
+			mcplib.WithNumber("duration", mcplib.Description("Optional provider class-length filter, in seconds (e.g. 1800 for 30 minutes). Accepted values are advertised by classes_filters.")),
+			mcplib.WithString("super_genre_id", mcplib.Description("Optional provider music-genre filter. Accepted values are advertised by classes_filters.")),
+			mcplib.WithBoolean("has_workout", mcplib.Description("Optional tri-state filter: true for classes you've already taken, false for classes you haven't. Omitting the parameter leaves it unfiltered -- omitted and false are different queries.")),
+			mcplib.WithBoolean("is_favorite_ride", mcplib.Description("Optional tri-state filter: true for bookmarked classes, false for not-bookmarked. Omitting the parameter leaves it unfiltered -- omitted and false are different queries.")),
 			mcplib.WithString("cursor", mcplib.Description("Opaque pagination cursor returned by a previous MCP response")),
 			mcplib.WithReadOnlyHintAnnotation(true),
 			mcplib.WithDestructiveHintAnnotation(false),
 			mcplib.WithOpenWorldHintAnnotation(true),
 		),
-		makeAPIHandlerStripFields("GET", "/api/v2/ride/archived", true, false, nil, mcpPageConfig{CursorParam: "page", NextCursorPath: ""}, []mcpParamBinding{{PublicName: "browse_category", WireName: "browse_category", Location: "query"}, {PublicName: "content_format", WireName: "content_format", Location: "query"}, {PublicName: "limit", WireName: "limit", Location: "query", Default: "100"}, {PublicName: "sort_by", WireName: "sort_by", Location: "query", Default: "original_air_time"}, {PublicName: "desc", WireName: "desc", Location: "query", Default: "true"}, {PublicName: "instructor_id", WireName: "instructor_id", Location: "query"}, {PublicName: "class_type_id", WireName: "class_type_id", Location: "query"}}, []string{}, rideArchivedRedundantFields),
+		makeAPIHandlerStripFields("GET", "/api/v2/ride/archived", true, false, nil, mcpPageConfig{CursorParam: "page", NextCursorPath: ""}, []mcpParamBinding{{PublicName: "browse_category", WireName: "browse_category", Location: "query"}, {PublicName: "content_format", WireName: "content_format", Location: "query"}, {PublicName: "limit", WireName: "limit", Location: "query", Default: "100"}, {PublicName: "sort_by", WireName: "sort_by", Location: "query", Default: "original_air_time"}, {PublicName: "desc", WireName: "desc", Location: "query", Default: "true"}, {PublicName: "instructor_id", WireName: "instructor_id", Location: "query"}, {PublicName: "class_type_id", WireName: "class_type_id", Location: "query"}, {PublicName: "duration", WireName: "duration", Location: "query"}, {PublicName: "super_genre_id", WireName: "super_genre_id", Location: "query"}, {PublicName: "has_workout", WireName: "has_workout", Location: "query"}, {PublicName: "is_favorite_ride", WireName: "is_favorite_ride", Location: "query"}}, []string{}, rideArchivedRedundantFields),
 	)
 	s.AddTool(
 		mcplib.NewTool("classes_show",
@@ -256,6 +265,39 @@ func formatMCPParamValue(v any) string {
 	}
 }
 
+// undeclaredArgNames returns the sorted names of args that are neither a path
+// param nor a declared binding -- the ones makeAPIHandlerStripFields forwards
+// raw onto the live API as an intentional escape hatch for provider filters
+// this CLI's spec doesn't cover. It's a pure function so the "which args count
+// as undeclared" logic is testable without a live client.
+func undeclaredArgNames(args map[string]any, pathParams, knownArgs map[string]bool) []string {
+	var names []string
+	for k := range args {
+		if pathParams[k] || knownArgs[k] {
+			continue
+		}
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// logUndeclaredArgs surfaces undeclared-argument forwarding to stderr (never
+// stdout, which carries MCP protocol frames on the stdio transport). Forwarding
+// itself is deliberate (see the "tool_surface" context string) -- it's the only
+// escape hatch for real provider filters this CLI's spec doesn't declare -- but
+// it also means a misspelled argument name fails silently, since the provider
+// just ignores an unrecognized query/body param instead of erroring. This gives
+// an operator watching server logs a way to catch a typo without changing the
+// escape hatch's behavior for a caller who spelled it right.
+func logUndeclaredArgs(pathTemplate string, args map[string]any, pathParams, knownArgs map[string]bool) {
+	names := undeclaredArgNames(args, pathParams, knownArgs)
+	if len(names) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "peloton-pp-mcp: %s forwarding undeclared argument(s) [%s] straight to the live API as raw query/body params -- if this was a misspelling, the provider will silently ignore it\n", pathTemplate, strings.Join(names, ", "))
+}
+
 // makeAPIHandler creates a generic MCP tool handler for an API endpoint.
 func makeAPIHandler(method, pathTemplate string, readOnly bool, binaryResponse bool, headerOverrides map[string]string, pageConfig mcpPageConfig, bindings []mcpParamBinding, positionalParams []string) server.ToolHandlerFunc {
 	return makeAPIHandlerStripFields(method, pathTemplate, readOnly, binaryResponse, headerOverrides, pageConfig, bindings, positionalParams, nil)
@@ -370,6 +412,7 @@ func makeAPIHandlerStripFields(method, pathTemplate string, readOnly bool, binar
 				params[k] = formatMCPParamValue(v)
 			}
 		}
+		logUndeclaredArgs(pathTemplate, args, pathParams, knownArgs)
 
 		var data json.RawMessage
 		switch method {
@@ -939,7 +982,7 @@ func handleContext(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToo
 		"tool_count":  30,
 		"paths":       paths,
 		// tool_surface tells agents which surface a capability lives on.
-		"tool_surface": "MCP exposes typed endpoint tools, framework tools (search/sql/context/sync/offline/workflow), plus a runtime mirror of user-facing CLI commands. Endpoint tools keep typed schemas; command-mirror tools shell out to the companion peloton-pp-cli binary. Typed endpoint tools forward any argument not in their declared schema straight onto the live API as a raw query/body param, unvalidated — this is intentional (it's an escape hatch for real Peloton filters our internal spec doesn't declare, e.g. classes_search accepts more provider filters than its 8 typed params cover), but it also means a misspelled argument name silently no-ops instead of erroring, and CLI-only flags like --select/--compact/--csv/--quiet have no effect on typed endpoint tools (they only work on command-mirror tools).",
+		"tool_surface": "MCP exposes typed endpoint tools, framework tools (search/sql/context/sync/offline/workflow), plus a runtime mirror of user-facing CLI commands. Endpoint tools keep typed schemas; command-mirror tools shell out to the companion peloton-pp-cli binary. classes_search/classes_catalog declare duration, super_genre_id, has_workout, and is_favorite_ride (has_workout and is_favorite_ride are tri-state: true/false/omitted are three distinct queries) alongside the original 8 params, matching classes_filters' vocabulary. Typed endpoint tools still forward any argument not in their declared schema straight onto the live API as a raw query/body param, unvalidated — this is intentional (it's an escape hatch for real Peloton filters our internal spec doesn't declare), but it also means a misspelled argument name silently no-ops on the provider side instead of erroring; the MCP server logs undeclared forwarded argument names to stderr so an operator can catch a typo, but a calling agent won't see that log. CLI-only flags like --select/--compact/--csv/--quiet have no effect on typed endpoint tools (they only work on command-mirror tools).",
 		"auth": map[string]any{
 			// "session_login" deliberately avoids any OAuth-flavored term:
 			// Peloton has no OAuth flow at all, just POST /auth/login once
@@ -1017,7 +1060,7 @@ func handleContext(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToo
 			"Use offline commands for network-free reads of previously-synced data; they never make a live API call.",
 			"offline_workout nests output under detail/history (use --select detail.title to reach a nested field). Every other offline command's fields, including \"caveats\" when a caveat applies, sit at the TOP level of the response -- not wrapped under a \"result\" key -- so e.g. offline_intervals's segments is reached with --select segments, not --select result.segments. offline_classes_filters double-nests under filters.filters (the wrapper's own \"filters\" key containing the provider's \"filters\" array) and filters.sorts -- there is no browse_categories/class_types field on this endpoint. Dotted --select paths only descend into object keys, not array indices (e.g. filters.filters.0.name does not work); arrays are matched element-wise instead.",
 			"Run doctor to check auth state, credential location, and sync cache freshness before assuming an API or credential problem.",
-			"Unrecognized typed-tool arguments are forwarded as raw live API params, not validated — a misspelled filter name silently no-ops instead of erroring. Double-check argument spelling against the tool's declared schema.",
+			"Unrecognized typed-tool arguments are forwarded as raw live API params, not validated — a misspelled filter name silently no-ops instead of erroring. Double-check argument spelling against the tool's declared schema. classes_search/classes_catalog now declare duration, super_genre_id, has_workout, and is_favorite_ride directly, so those four no longer need the raw passthrough.",
 		},
 		// Command-mirror capabilities are exposed through MCP by shelling out
 		// to the companion CLI binary.
