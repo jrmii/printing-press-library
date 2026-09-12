@@ -243,6 +243,38 @@ func syncWarningJSON(resource, parent string, status int, reason, message string
 	return string(out)
 }
 
+// syncCompleteEventJSON renders a sync_complete event for the flat-resource
+// sync loop. Two consecutive resumed sync/workflow-archive calls against a
+// large account can log the same "total" (this call's item count) both
+// times -- live-tested at exactly {"total":500} twice in a row, which reads
+// as a stuck cursor even though resumption is working correctly (each call
+// fetched a genuinely different 500-item slice, confirmed by distinct row
+// IDs in the store). "total" keeps its existing this-call meaning (an
+// existing consumer parsing it should see no behavior change); store_total
+// (the resource's true row count in the local store after this call) and
+// resume_cursor (empty string on natural completion, non-empty when a
+// --max-pages cap left a resumable position) are new fields that give a
+// caller the cumulative signal "total" alone can't.
+func syncCompleteEventJSON(resource string, total, storeTotal int, resumeCursor string, durationMs int64) string {
+	payload := struct {
+		Event        string `json:"event"`
+		Resource     string `json:"resource"`
+		Total        int    `json:"total"`
+		StoreTotal   int    `json:"store_total"`
+		ResumeCursor string `json:"resume_cursor,omitempty"`
+		DurationMs   int64  `json:"duration_ms"`
+	}{
+		Event:        "sync_complete",
+		Resource:     resource,
+		Total:        total,
+		StoreTotal:   storeTotal,
+		ResumeCursor: resumeCursor,
+		DurationMs:   durationMs,
+	}
+	out, _ := json.Marshal(payload)
+	return string(out)
+}
+
 // syncUserParams carries user-supplied query parameters injected into sync
 // HTTP requests. flatGlobal entries come from --param and inject into
 // flat-list requests only; trueGlobal entries come from --global-param and

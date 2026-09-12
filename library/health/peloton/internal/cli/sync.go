@@ -1023,7 +1023,11 @@ func syncResource(ctx context.Context, c interface {
 	}
 
 	if !humanFriendly {
-		fmt.Fprintf(syncEvents, `{"event":"sync_complete","resource":"%s","total":%d,"duration_ms":%d}`+"\n", resource, totalCount, time.Since(started).Milliseconds())
+		// storeTotal's own query error is non-fatal to the sync itself --
+		// falls back to 0 rather than failing a completed sync over a
+		// cosmetic count query.
+		storeTotal, _ := db.Count(resource)
+		fmt.Fprintln(syncEvents, syncCompleteEventJSON(resource, totalCount, storeTotal, finalCursor, time.Since(started).Milliseconds()))
 	}
 
 	if consumedTotal > 0 && totalCount == 0 && extractFailureTotal >= consumedTotal {
