@@ -163,6 +163,9 @@ func newOfflineClassSearchCmd(flags *rootFlags) *cobra.Command {
 	var f offlineClassFilters
 	var limit int
 	cmd := &cobra.Command{Use: "search", Short: "Search local class facts by factual stored fields and structural intersections.", RunE: func(cmd *cobra.Command, _ []string) error {
+		if limit < 0 {
+			return fmt.Errorf("--limit must be zero or positive (got %d); 0 means unbounded", limit)
+		}
 		facts, err := offlineClasses(cmd)
 		if err != nil {
 			return err

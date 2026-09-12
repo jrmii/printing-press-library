@@ -609,3 +609,22 @@ func TestOfflineClassesSearchLimitBoundsResults(t *testing.T) {
 		t.Fatalf("items = %d, want 5 (--limit 0 must mean unbounded)", len(items))
 	}
 }
+
+// TestOfflineClassesSearchRejectsNegativeLimit guards a review finding: a
+// negative --limit (e.g. -1) satisfied neither branch of `if limit > 0 &&
+// len(matches) > limit` (limit>0 is false), so truncation silently never
+// ran and every match was returned uncapped -- defeating the response-size
+// protection --limit exists to provide, with no error and no caveat
+// explaining why the cap didn't apply.
+func TestOfflineClassesSearchRejectsNegativeLimit(t *testing.T) {
+	home := t.TempDir()
+	seedOfflineFacts(t, home)
+
+	_, err := executeOffline(t, home, "offline", "classes", "search", "--limit", "-1")
+	if err == nil {
+		t.Fatal("offline classes search --limit -1 succeeded, want a rejected negative limit")
+	}
+	if !strings.Contains(err.Error(), "--limit") {
+		t.Fatalf("error = %q, want it to name --limit as the problem", err.Error())
+	}
+}
