@@ -1330,6 +1330,106 @@ func TestClassesResponseStripsSecondRoundLiveConfirmedBloat(t *testing.T) {
 	}
 }
 
+// TestClassAlwaysStripFieldsRemovesConstantEmptyAndDuplicateFieldsUnconditionally
+// guards a third round of independent live testing: a set of per-class
+// fields that are either always empty across every observed class or exact
+// duplicates of a sibling field already kept (difficulty_rating_avg/
+// overall_rating_avg/ride_type_ids). Unlike the verboseFieldToggle-gated
+// categories, no argument restores these -- there is no scenario where a
+// caller wants an always-empty field or a value already present under
+// another name, so deepStripFields is applied unconditionally.
+func TestClassAlwaysStripFieldsRemovesConstantEmptyAndDuplicateFieldsUnconditionally(t *testing.T) {
+	fixture := json.RawMessage(`{
+		"data": [
+			{
+				"id": "1", "title": "Class One",
+				"conflicted_movement_preferences": [], "muscle_group_score": null,
+				"equipment_ids": [], "equipment_tags": [], "extra_images": [],
+				"dynamic_video_recorded_speed_in_mph": null,
+				"distance": null, "distance_display_value": "", "distance_unit": null,
+				"thumbnail_location": null, "thumbnail_title": "",
+				"difficulty_estimate": 2.5, "difficulty_rating_avg": 2.5,
+				"overall_estimate": 4.1, "overall_rating_avg": 4.1,
+				"class_type_ids": ["ct1"], "ride_type_ids": ["rt1"], "ride_type_id": "rt1"
+			}
+		]
+	}`)
+
+	stripped := deepStripFields(fixture, classAlwaysStripFields)
+	strippedText := string(stripped)
+	for _, wantAbsent := range classAlwaysStripFields {
+		if strings.Contains(strippedText, "\""+wantAbsent+"\"") {
+			t.Fatalf("classAlwaysStripFields did not strip %q: %s", wantAbsent, strippedText)
+		}
+	}
+	for _, wantPresent := range []string{"\"id\":\"1\"", "difficulty_rating_avg", "overall_rating_avg", "ride_type_ids"} {
+		if !strings.Contains(strippedText, wantPresent) {
+			t.Fatalf("classAlwaysStripFields removed a field it shouldn't have (missing %q): %s", wantPresent, strippedText)
+		}
+	}
+}
+
+// TestClassesVerboseTogglesIncludeInternalIds guards the third opt-in
+// category found by the same round of live testing: internal cross-
+// reference identifiers (home/studio location ids, series grouping id,
+// content licensing tier, origin locale) that -- unlike
+// classAlwaysStripFields -- have no alternate source, so they stay
+// recoverable via include_internal_ids rather than being stripped for good.
+func TestClassesVerboseTogglesIncludeInternalIds(t *testing.T) {
+	fixture := json.RawMessage(`{
+		"data": [
+			{
+				"id": "1", "title": "Class One",
+				"home_peloton_id": "hp-1", "studio_peloton_id": "sp-1",
+				"series_id": "series-1", "content_availability_level": "premium",
+				"origin_locale": "en-US"
+			}
+		]
+	}`)
+
+	stripped := applyVerboseFieldToggles(fixture, map[string]any{}, classesVerboseToggles)
+	for _, wantAbsent := range classInternalIdentifierFields {
+		if strings.Contains(string(stripped), wantAbsent) {
+			t.Fatalf("default (unincluded) response still contains %q: %s", wantAbsent, stripped)
+		}
+	}
+
+	restored := applyVerboseFieldToggles(fixture, map[string]any{"include_internal_ids": true}, classesVerboseToggles)
+	for _, want := range classInternalIdentifierFields {
+		if !strings.Contains(string(restored), want) {
+			t.Fatalf("include_internal_ids=true did not restore %q: %s", want, restored)
+		}
+	}
+}
+
+// TestInstructorBioFieldsCoversThirdRoundLiveConfirmedFields guards the
+// additional instructor fields found alongside classAlwaysStripFields and
+// classInternalIdentifierFields in the same round of live testing: two
+// missed image URLs plus a block of social/media links, playback defaults,
+// and admin/catalog bookkeeping fields.
+func TestInstructorBioFieldsCoversThirdRoundLiveConfirmedFields(t *testing.T) {
+	for _, want := range []string{
+		"jumbotron_url", "bike_instructor_list_display_image_url",
+		"film_link", "facebook_fan_page", "instagram_profile",
+		"twitter_profile", "strava_profile", "spotify_playlist_uri",
+		"default_cross_fade", "default_cue_delay",
+		"coach_type", "individual_instructor_ids", "featured_profile",
+		"is_announced", "is_filterable", "is_instructor_group",
+		"is_visible", "list_order",
+	} {
+		found := false
+		for _, f := range instructorBioFields {
+			if f == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("instructorBioFields is missing third-round field %q", want)
+		}
+	}
+}
+
 // TestReservedMCPMetaArgsIncludesEveryVerboseToggle guards the other half of
 // the same review finding: include_stream_urls/include_instructor_bios are
 // MCP-only response-shaping arguments, not real Peloton API parameters, so
@@ -1366,6 +1466,7 @@ func TestClassesCatalogAndSearchDeclareSelectAndVerboseToggles(t *testing.T) {
 		"select":                  "string",
 		"include_stream_urls":     "boolean",
 		"include_instructor_bios": "boolean",
+		"include_internal_ids":    "boolean",
 	}
 	for _, toolName := range []string{"classes_catalog", "classes_search", "classes_show", "classes_structure"} {
 		tool, ok := tools[toolName]

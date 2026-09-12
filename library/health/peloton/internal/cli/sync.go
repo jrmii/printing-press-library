@@ -81,7 +81,14 @@ Exit codes & warnings:
   access-policy body) are reported as warnings rather than failing the
   run. In --json mode each is emitted as a {"event":"sync_warning",...}
   line carrying status, reason, and message fields, and a final
-  {"event":"sync_summary",...} aggregates the run.
+  {"event":"sync_summary",...} aggregates the run. sync_summary's
+  resources_warned counts resources whose run ended in a warning state
+  (e.g. access-denied skips) -- it is not a count of sync_warning lines.
+  A resource can emit one or more sync_warning events along the way
+  (pagination cap hits, non-incremental notices, cursor issues) while
+  still completing successfully and being tallied under success, so
+  resources_warned will usually be lower than the number of
+  sync_warning lines seen in the stream.
 
   Exit 0 when at least one resource synced and no resource flagged in
   the spec as critical (x-critical: true) failed; non-critical failures
@@ -484,7 +491,7 @@ account with tens of thousands of catalog classes synced.
 						totalSynced, totalResources, elapsed.Seconds())
 				}
 			} else {
-				fmt.Fprintf(syncEventWriter, `{"event":"sync_summary","total_records":%d,"resources":%d,"success":%d,"warned":%d,"errored":%d,"duration_ms":%d}`+"\n",
+				fmt.Fprintf(syncEventWriter, `{"event":"sync_summary","total_records":%d,"resources":%d,"success":%d,"resources_warned":%d,"errored":%d,"duration_ms":%d}`+"\n",
 					totalSynced, totalResources, successCount, warnCount, errCount, elapsed.Milliseconds())
 			}
 
