@@ -328,7 +328,7 @@ func RegisterTools(s *server.MCPServer) {
 			mcplib.WithDestructiveHintAnnotation(false),
 			mcplib.WithOpenWorldHintAnnotation(true),
 		),
-		makeAPIHandlerVerbose("GET", "/api/v2/ride/archived", true, false, nil, mcpPageConfig{CursorParam: "page", NextCursorPath: "", ArrayField: "data"}, []mcpParamBinding{{PublicName: "browse_category", WireName: "browse_category", Location: "query"}, {PublicName: "content_format", WireName: "content_format", Location: "query"}, {PublicName: "limit", WireName: "limit", Location: "query", Default: "100"}, {PublicName: "sort_by", WireName: "sort_by", Location: "query", Default: "original_air_time"}, {PublicName: "desc", WireName: "desc", Location: "query", Default: "true"}, {PublicName: "instructor_id", WireName: "instructor_id", Location: "query"}, {PublicName: "class_type_id", WireName: "class_type_id", Location: "query"}, {PublicName: "duration", WireName: "duration", Location: "query"}, {PublicName: "super_genre_id", WireName: "super_genre_id", Location: "query"}, {PublicName: "has_workout", WireName: "has_workout", Location: "query"}, {PublicName: "is_favorite_ride", WireName: "is_favorite_ride", Location: "query"}}, []string{}, rideArchivedRedundantFields, classesVerboseToggles),
+		makeAPIHandlerVerbose("GET", "/api/v2/ride/archived", true, false, nil, mcpPageConfig{CursorParam: "page", NextCursorPath: "", ArrayField: "data", NextPageIndicatorPath: "show_next", CurrentPageNumberPath: "page"}, []mcpParamBinding{{PublicName: "browse_category", WireName: "browse_category", Location: "query"}, {PublicName: "content_format", WireName: "content_format", Location: "query"}, {PublicName: "limit", WireName: "limit", Location: "query", Default: "100"}, {PublicName: "sort_by", WireName: "sort_by", Location: "query", Default: "original_air_time"}, {PublicName: "desc", WireName: "desc", Location: "query", Default: "true"}, {PublicName: "instructor_id", WireName: "instructor_id", Location: "query"}, {PublicName: "class_type_id", WireName: "class_type_id", Location: "query"}, {PublicName: "duration", WireName: "duration", Location: "query"}, {PublicName: "super_genre_id", WireName: "super_genre_id", Location: "query"}, {PublicName: "has_workout", WireName: "has_workout", Location: "query"}, {PublicName: "is_favorite_ride", WireName: "is_favorite_ride", Location: "query"}}, []string{}, rideArchivedRedundantFields, classesVerboseToggles),
 	)
 	s.AddTool(
 		mcplib.NewTool("classes_filters",
@@ -367,7 +367,7 @@ func RegisterTools(s *server.MCPServer) {
 			mcplib.WithDestructiveHintAnnotation(false),
 			mcplib.WithOpenWorldHintAnnotation(true),
 		),
-		makeAPIHandlerVerbose("GET", "/api/v2/ride/archived", true, false, nil, mcpPageConfig{CursorParam: "page", NextCursorPath: "", ArrayField: "data"}, []mcpParamBinding{{PublicName: "browse_category", WireName: "browse_category", Location: "query"}, {PublicName: "content_format", WireName: "content_format", Location: "query"}, {PublicName: "limit", WireName: "limit", Location: "query", Default: "100"}, {PublicName: "sort_by", WireName: "sort_by", Location: "query", Default: "original_air_time"}, {PublicName: "desc", WireName: "desc", Location: "query", Default: "true"}, {PublicName: "instructor_id", WireName: "instructor_id", Location: "query"}, {PublicName: "class_type_id", WireName: "class_type_id", Location: "query"}, {PublicName: "duration", WireName: "duration", Location: "query"}, {PublicName: "super_genre_id", WireName: "super_genre_id", Location: "query"}, {PublicName: "has_workout", WireName: "has_workout", Location: "query"}, {PublicName: "is_favorite_ride", WireName: "is_favorite_ride", Location: "query"}}, []string{}, rideArchivedRedundantFields, classesVerboseToggles),
+		makeAPIHandlerVerbose("GET", "/api/v2/ride/archived", true, false, nil, mcpPageConfig{CursorParam: "page", NextCursorPath: "", ArrayField: "data", NextPageIndicatorPath: "show_next", CurrentPageNumberPath: "page"}, []mcpParamBinding{{PublicName: "browse_category", WireName: "browse_category", Location: "query"}, {PublicName: "content_format", WireName: "content_format", Location: "query"}, {PublicName: "limit", WireName: "limit", Location: "query", Default: "100"}, {PublicName: "sort_by", WireName: "sort_by", Location: "query", Default: "original_air_time"}, {PublicName: "desc", WireName: "desc", Location: "query", Default: "true"}, {PublicName: "instructor_id", WireName: "instructor_id", Location: "query"}, {PublicName: "class_type_id", WireName: "class_type_id", Location: "query"}, {PublicName: "duration", WireName: "duration", Location: "query"}, {PublicName: "super_genre_id", WireName: "super_genre_id", Location: "query"}, {PublicName: "has_workout", WireName: "has_workout", Location: "query"}, {PublicName: "is_favorite_ride", WireName: "is_favorite_ride", Location: "query"}}, []string{}, rideArchivedRedundantFields, classesVerboseToggles),
 	)
 	s.AddTool(
 		mcplib.NewTool("classes_show",
@@ -423,7 +423,7 @@ func RegisterTools(s *server.MCPServer) {
 			mcplib.WithDestructiveHintAnnotation(false),
 			mcplib.WithOpenWorldHintAnnotation(true),
 		),
-		makeAPIHandler("GET", "/api/user/{user_id}/workouts", true, false, nil, mcpPageConfig{CursorParam: "page", NextCursorPath: "", ArrayField: "data"}, []mcpParamBinding{{PublicName: "user_id", WireName: "user_id", Location: "path"}, {PublicName: "joins", WireName: "joins", Location: "query", Default: "ride"}, {PublicName: "limit", WireName: "limit", Location: "query", Default: "100"}, {PublicName: "sort", WireName: "sort", Location: "query", Default: "-start_time"}}, []string{"user_id"}),
+		makeAPIHandler("GET", "/api/user/{user_id}/workouts", true, false, nil, mcpPageConfig{CursorParam: "page", NextCursorPath: "", ArrayField: "data", NextPageIndicatorPath: "show_next", CurrentPageNumberPath: "page"}, []mcpParamBinding{{PublicName: "user_id", WireName: "user_id", Location: "path"}, {PublicName: "joins", WireName: "joins", Location: "query", Default: "ride"}, {PublicName: "limit", WireName: "limit", Location: "query", Default: "100"}, {PublicName: "sort", WireName: "sort", Location: "query", Default: "-start_time"}}, []string{"user_id"}),
 	)
 	s.AddTool(
 		mcplib.NewTool("workouts_performance",
@@ -507,6 +507,18 @@ type mcpPageConfig struct {
 	// response has at most one top-level array field, where auto-detection
 	// already works.
 	ArrayField string
+
+	// NextPageIndicatorPath and CurrentPageNumberPath name response paths
+	// for endpoints that paginate upstream via an incrementing integer page
+	// number rather than a cursor value in the body -- see
+	// bound.PageOptions' fields of the same name for why this exists: once
+	// a fetched upstream page is fully split into local MCP sub-pages,
+	// nothing else signals that more upstream data exists, and a caller
+	// paginating by following next_cursor until it's absent stops early,
+	// silently missing data. classes_catalog/classes_search confirmed live
+	// to report these as "show_next"/"page".
+	NextPageIndicatorPath string
+	CurrentPageNumberPath string
 }
 
 func formatMCPParamValue(v any) string {
@@ -875,10 +887,12 @@ func mcpToolError(message string) *mcplib.CallToolResult {
 
 func mcpToolPageResultText(method string, data json.RawMessage, pageConfig mcpPageConfig, cursor string) *mcplib.CallToolResult {
 	return mcplib.NewToolResultText(bound.EndpointPageResponse(method, data, bound.PageOptions{
-		Cursor:         cursor,
-		CursorParam:    pageConfig.CursorParam,
-		NextCursorPath: pageConfig.NextCursorPath,
-		ArrayField:     pageConfig.ArrayField,
+		Cursor:                cursor,
+		CursorParam:           pageConfig.CursorParam,
+		NextCursorPath:        pageConfig.NextCursorPath,
+		ArrayField:            pageConfig.ArrayField,
+		NextPageIndicatorPath: pageConfig.NextPageIndicatorPath,
+		CurrentPageNumberPath: pageConfig.CurrentPageNumberPath,
 	}))
 }
 
@@ -1360,7 +1374,7 @@ func handleContext(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToo
 		"tool_count":  30,
 		"paths":       paths,
 		// tool_surface tells agents which surface a capability lives on.
-		"tool_surface": "MCP exposes typed endpoint tools, framework tools (search/sql/context/sync/offline/workflow), plus a runtime mirror of user-facing CLI commands. Endpoint tools keep typed schemas; command-mirror tools shell out to the companion peloton-pp-cli binary. classes_search/classes_catalog declare duration, super_genre_id, has_workout, and is_favorite_ride (has_workout and is_favorite_ride are tri-state: true/false/omitted are three distinct queries) alongside the original 8 params, matching classes_filters' vocabulary. Every typed endpoint tool declares a select argument (same dotted-path projection semantics as this CLI's --select flag) so a caller can shrink an oversized response itself; classes_catalog/classes_search/classes_show/classes_structure additionally default to stripping stream/playback URLs, join tokens, instructor bio/Q&A/share-image blocks, internal cross-reference identifiers, and a block of is_*/has_* boolean flags (restore with include_stream_urls/include_instructor_bios/include_internal_ids/include_flags; is_favorite is always present regardless of include_flags), plus always strip a set of per-class fields confirmed always-empty/constant or duplicate of a kept sibling field -- these have no restore argument since there is never a reason to want them back. classes_catalog, classes_search, and workouts_list carry an ArrayField hint (\"data\") so an oversized response is always resumable via next_cursor, even unprojected -- their response has a sibling array field (\"instructors\" on the classes tools) that would otherwise defeat the generic single-array-envelope detector and fall back to a dead-end raw preview. Typed endpoint tools still forward any argument not in their declared schema straight onto the live API as a raw query/body param, unvalidated — this is intentional (it's an escape hatch for real Peloton filters our internal spec doesn't declare), but it also means a misspelled argument name silently no-ops on the provider side instead of erroring; the MCP server logs undeclared forwarded argument names to stderr so an operator can catch a typo, but a calling agent won't see that log. --compact/--csv/--quiet remain CLI-only and have no effect on typed endpoint tools (only on command-mirror tools).",
+		"tool_surface": "MCP exposes typed endpoint tools, framework tools (search/sql/context/sync/offline/workflow), plus a runtime mirror of user-facing CLI commands. Endpoint tools keep typed schemas; command-mirror tools shell out to the companion peloton-pp-cli binary. classes_search/classes_catalog declare duration, super_genre_id, has_workout, and is_favorite_ride (has_workout and is_favorite_ride are tri-state: true/false/omitted are three distinct queries) alongside the original 8 params, matching classes_filters' vocabulary. Every typed endpoint tool declares a select argument (same dotted-path projection semantics as this CLI's --select flag) so a caller can shrink an oversized response itself; classes_catalog/classes_search/classes_show/classes_structure additionally default to stripping stream/playback URLs, join tokens, instructor bio/Q&A/share-image blocks, internal cross-reference identifiers, and a block of is_*/has_* boolean flags (restore with include_stream_urls/include_instructor_bios/include_internal_ids/include_flags; is_favorite is always present regardless of include_flags), plus always strip a set of per-class fields confirmed always-empty/constant or duplicate of a kept sibling field -- these have no restore argument since there is never a reason to want them back. classes_catalog, classes_search, and workouts_list carry an ArrayField hint (\"data\") so an oversized response is always resumable via next_cursor, even unprojected -- their response has a sibling array field (\"instructors\" on the classes tools) that would otherwise defeat the generic single-array-envelope detector and fall back to a dead-end raw preview. Those same three tools also carry a page/show_next fallback so pagination correctly advances the real upstream page once a fetched batch has been fully split into MCP-sized sub-pages -- always compare returned_count against count rather than assuming next_cursor's absence alone means no more data exists upstream. Typed endpoint tools still forward any argument not in their declared schema straight onto the live API as a raw query/body param, unvalidated — this is intentional (it's an escape hatch for real Peloton filters our internal spec doesn't declare), but it also means a misspelled argument name silently no-ops on the provider side instead of erroring; the MCP server logs undeclared forwarded argument names to stderr so an operator can catch a typo, but a calling agent won't see that log. --compact/--csv/--quiet remain CLI-only and have no effect on typed endpoint tools (only on command-mirror tools).",
 		"auth": map[string]any{
 			// "session_login" deliberately avoids any OAuth-flavored term:
 			// Peloton has no OAuth flow at all, just POST /auth/login once

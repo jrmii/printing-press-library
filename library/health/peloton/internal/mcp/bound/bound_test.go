@@ -316,6 +316,135 @@ func TestEndpointPageResponseArrayFieldHintSurvivesASiblingArray(t *testing.T) {
 	}
 }
 
+// classesPageIntFixture builds a fixture shaped like classes_catalog/
+// classes_search's real upstream response: a "data" array of itemCount
+// records, plus the page/show_next/page_count/total fields the live API
+// actually reports (confirmed via live field-presence testing), which
+// NextPageIndicatorPath/CurrentPageNumberPath read to advance upstream
+// page-int pagination.
+func classesPageIntFixture(itemCount, page int, showNext bool) json.RawMessage {
+	items := make([]map[string]string, 0, itemCount)
+	for i := 0; i < itemCount; i++ {
+		items = append(items, map[string]string{
+			"id": "class-p" + strconv.Itoa(page) + "-" + strconv.Itoa(i),
+			// Padding so a 100-item page exceeds MaxBytes and needs local
+			// MaxItems-sized sub-paging, matching the live-observed shape.
+			"title": strings.Repeat("verbose class title ", 30),
+		})
+	}
+	out, _ := json.Marshal(map[string]any{
+		"data":      items,
+		"page":      page,
+		"show_next": showNext,
+		"total":     15324,
+	})
+	return out
+}
+
+// TestEndpointPageResponseIntegerPageFallbackAdvancesPastLocalSubPaging
+// guards Issue 11: classes_catalog/classes_search paginate upstream via an
+// incrementing ?page=N integer, not a cursor value in the body, so
+// NextCursorPath (empty for these endpoints -- there's no such value)
+// never fires. Before the NextPageIndicatorPath/CurrentPageNumberPath
+// fallback, once a fetched 100-item upstream page was split into two
+// 50-item local MCP sub-pages (MaxItems=50), the second sub-page had
+// nothing left to advance on -- local offset was exhausted and no upstream
+// cursor was known -- so it silently omitted next_cursor even though
+// show_next:true in the body said more data existed. A caller paginating
+// by "follow next_cursor until absent" stopped two sub-pages in,
+// permanently missing everything past the first upstream page: reproduced
+// live as 100 of 15,324 records retrieved with no indication anything was
+// missing.
+func TestEndpointPageResponseIntegerPageFallbackAdvancesPastLocalSubPaging(t *testing.T) {
+	opts := PageOptions{
+		CursorParam:           "page",
+		ArrayField:            "data",
+		NextPageIndicatorPath: "show_next",
+		CurrentPageNumberPath: "page",
+	}
+
+	// Page 1: first 100-item upstream page (page=0), no incoming cursor.
+	// This is the existing "local offset still available" case (50 < 100)
+	// and already worked before this fix -- included for a realistic
+	// end-to-end trace, not as new coverage on its own.
+	page0 := classesPageIntFixture(100, 0, true)
+	firstText := EndpointPageResponse("GET", page0, opts)
+	var first struct {
+		Data       []json.RawMessage `json:"data"`
+		Truncated  bool              `json:"truncated"`
+		NextCursor string            `json:"next_cursor"`
+	}
+	if err := json.Unmarshal([]byte(firstText), &first); err != nil {
+		t.Fatalf("first page result must remain valid JSON: %v\n%s", err, firstText)
+	}
+	if len(first.Data) != 50 || first.NextCursor == "" {
+		t.Fatalf("first page: got %d items, next_cursor=%q; want 50 items and a non-empty cursor", len(first.Data), first.NextCursor)
+	}
+
+	// Page 2: the MCP client's tool handler has no real upstream cursor
+	// yet (this cursor's UpstreamCursor is still "", since page 1 only
+	// advanced the local Offset), so it refetches the SAME upstream page
+	// 0 -- this is what the real tools.go handler does today, traced from
+	// UpstreamCursor's empty-string behavior. This is the exhausted-local-
+	// offset case Issue 11 was filed against: without the fallback,
+	// next_cursor comes back empty here even though show_next was true.
+	secondOpts := opts
+	secondOpts.Cursor = first.NextCursor
+	secondText := EndpointPageResponse("GET", page0, secondOpts)
+	var second struct {
+		Data          []json.RawMessage `json:"data"`
+		ReturnedCount int               `json:"returned_count"`
+		Truncated     bool              `json:"truncated"`
+		NextCursor    string            `json:"next_cursor"`
+	}
+	if err := json.Unmarshal([]byte(secondText), &second); err != nil {
+		t.Fatalf("second page result must remain valid JSON: %v\n%s", err, secondText)
+	}
+	if len(second.Data) != 50 {
+		t.Fatalf("second page: got %d items, want 50", len(second.Data))
+	}
+	if second.NextCursor == "" {
+		t.Fatalf("second page: next_cursor is empty despite show_next:true in the fixture -- Issue 11 regression: %s", secondText)
+	}
+
+	upstream, err := UpstreamCursor(second.NextCursor)
+	if err != nil {
+		t.Fatalf("UpstreamCursor(%q): %v", second.NextCursor, err)
+	}
+	if upstream != "1" {
+		t.Fatalf("second page's next_cursor should carry upstream page \"1\" (current page 0 + 1), got %q", upstream)
+	}
+
+	// Page 3: the MCP handler now has a real upstream cursor ("1") and
+	// would fetch the next actual upstream page. Confirm the cycle
+	// continues correctly with fresh data, and confirm it terminates
+	// (empty next_cursor) once show_next is false.
+	// page 1 is the final upstream page (50 items, under a full page and
+	// show_next:false), so a single local sub-page covers it exactly and
+	// pagination should terminate here (empty next_cursor) rather than
+	// needing a further local-offset advance.
+	page1 := classesPageIntFixture(50, 1, false)
+	thirdOpts := opts
+	thirdOpts.Cursor = second.NextCursor
+	thirdText := EndpointPageResponse("GET", page1, thirdOpts)
+	var third struct {
+		Data       []map[string]string `json:"data"`
+		NextCursor string              `json:"next_cursor"`
+	}
+	if err := json.Unmarshal([]byte(thirdText), &third); err != nil {
+		t.Fatalf("third page result must remain valid JSON: %v\n%s", err, thirdText)
+	}
+	if len(third.Data) != 50 {
+		t.Fatalf("third page: got %d items, want 50", len(third.Data))
+	}
+	if !strings.HasPrefix(third.Data[0]["id"], "class-p1-") {
+		t.Fatalf("third page did not advance to new upstream data (page 1): got id %q", third.Data[0]["id"])
+	}
+	if third.NextCursor != "" {
+		t.Fatalf("third page should terminate pagination (show_next:false, exactly one local page), got next_cursor=%q", third.NextCursor)
+	}
+}
+
 func TestEndpointResponseTruncatedByItemLimitDoesNotClaimByteOverflow(t *testing.T) {
 	items := make([]string, 0, MaxItems+1)
 	for i := 0; i < MaxItems+1; i++ {

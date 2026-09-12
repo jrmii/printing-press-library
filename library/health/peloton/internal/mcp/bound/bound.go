@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -17,6 +18,22 @@ const (
 
 	maxPreviewBytes = 4000
 )
+
+// original_bytes (on every envelope shape this package emits: the bounded
+// list/page envelope, the preview envelope, and the internal
+// _pp_original_bytes field) always means the byte length of the JSON this
+// package itself received as input -- i.e. after whatever shaping the
+// caller already applied (field stripping, verbose-toggle stripping, a
+// "select" projection) but before this package's own truncation. It is
+// NOT the size of the raw upstream API response. A select-narrowed call
+// and an unprojected call on the same underlying data will report very
+// different original_bytes for exactly this reason: the field describes
+// "how big would this response have been without MY truncation", not "how
+// big is the thing you originally asked the API for". Live testing found
+// this genuinely ambiguous (a select=data.id call read original_bytes as
+// its already-tiny projected size, while an unprojected call over budget
+// read it as that much larger raw size) -- both were correct under this
+// definition, but the definition itself was undocumented.
 
 const (
 	endpointListNote    = "Typed MCP endpoint response was bounded for MCP output. Narrow the request with limit, offset, filters, search/sql, or a command-mirror tool with --agent/--compact/--select."
@@ -48,6 +65,24 @@ type PageOptions struct {
 	// should set this so an oversized unprojected response still becomes a
 	// resumable, paginable envelope instead of a raw unparsable preview.
 	ArrayField string
+
+	// NextPageIndicatorPath and CurrentPageNumberPath name dotted response
+	// paths for endpoints that paginate upstream via an incrementing
+	// integer page number (no cursor value in the body for NextCursorPath
+	// to extract) rather than an opaque cursor. When both are set and
+	// NextCursorPath yields nothing, a boolean true at NextPageIndicatorPath
+	// (e.g. "show_next") combined with an integer at CurrentPageNumberPath
+	// (e.g. "page") synthesizes the next upstream page number as the
+	// outgoing cursor's UpstreamCursor. Without this, once a fetched
+	// upstream page has been fully split into local MCP sub-pages
+	// (boundedPageListEnvelope's own MaxItems-sized slices), there is no
+	// signal at all telling the caller more upstream data exists: the
+	// local offset is exhausted, NextCursorPath is empty, and the response
+	// silently stops emitting next_cursor even though the upstream API has
+	// more pages -- confirmed live on classes_catalog/classes_search,
+	// which paginate via ?page=N and report page/show_next in the body.
+	NextPageIndicatorPath string
+	CurrentPageNumberPath string
 }
 
 type endpointCursor struct {
@@ -224,6 +259,9 @@ func boundedSingleArrayPageObject(data json.RawMessage, opts PageOptions) ([]byt
 		return nil, false
 	}
 	nextUpstream := extractStringPath(data, opts.NextCursorPath)
+	if nextUpstream == "" {
+		nextUpstream = extractNextIntegerPage(data, opts.NextPageIndicatorPath, opts.CurrentPageNumberPath)
+	}
 	return boundedPageListEnvelope(arrayField, items, data, endpointListNote, opts, obj, nextUpstream), true
 }
 
@@ -448,28 +486,67 @@ func decodeEndpointCursor(cursor string) (endpointCursor, error) {
 }
 
 func extractStringPath(data json.RawMessage, path string) string {
+	v, ok := extractPath(data, path)
+	if !ok {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
+
+// extractPath traverses a dotted response path (object keys only, no array
+// indexing) and returns the raw decoded value at that path. json.Unmarshal
+// decodes JSON numbers as float64 and JSON booleans as bool, so callers
+// type-assert the concrete shape they expect.
+func extractPath(data json.RawMessage, path string) (any, bool) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return ""
+		return nil, false
 	}
 	var v any
 	if json.Unmarshal(data, &v) != nil {
-		return ""
+		return nil, false
 	}
 	for _, part := range strings.Split(path, ".") {
 		obj, ok := v.(map[string]any)
 		if !ok {
-			return ""
+			return nil, false
 		}
 		v, ok = obj[part]
 		if !ok {
-			return ""
+			return nil, false
 		}
 	}
-	if s, ok := v.(string); ok {
-		return s
+	return v, true
+}
+
+// extractNextIntegerPage implements PageOptions' integer-page-number
+// pagination fallback: when the response reports a boolean "more pages
+// exist" flag at indicatorPath and the current page number at numberPath,
+// it returns the next page number as a string (suitable as an outgoing
+// UpstreamCursor / CursorParam value). Returns "" if either path is unset,
+// missing, or not the expected type -- callers already treat "" as "no
+// more pages" via nextPageCursor's default case, so this degrades safely.
+func extractNextIntegerPage(data json.RawMessage, indicatorPath, numberPath string) string {
+	if indicatorPath == "" || numberPath == "" {
+		return ""
 	}
-	return ""
+	hasNext, ok := extractPath(data, indicatorPath)
+	if !ok {
+		return ""
+	}
+	if b, ok := hasNext.(bool); !ok || !b {
+		return ""
+	}
+	current, ok := extractPath(data, numberPath)
+	if !ok {
+		return ""
+	}
+	n, ok := current.(float64)
+	if !ok {
+		return ""
+	}
+	return strconv.Itoa(int(n) + 1)
 }
 
 func previewEnvelope(data []byte, note string) string {
