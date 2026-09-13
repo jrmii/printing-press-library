@@ -40,6 +40,7 @@ const (
 	endpointPreviewNote = "Typed MCP endpoint response exceeded the tool result budget and was not a recognized list envelope. Narrow the request with filters, search/sql, or a command-mirror tool with --agent/--compact/--select."
 	jsonResultNote      = "MCP JSON result exceeded the tool result budget. Narrow the request with limit, filters, search/sql, or --select/--compact where available."
 	textResultNote      = "MCP command output exceeded the tool result budget. Rerun with narrower flags, --agent, --compact, --select, or --limit where available."
+	pageSizeCapNote     = "Typed MCP endpoint response was capped at a fixed page size for MCP output, not a byte-budget overrun. Follow next_cursor to continue; select can still shrink each page's own payload."
 )
 
 // PageOptions describes resumable list context for typed MCP endpoint results.
@@ -83,6 +84,18 @@ type PageOptions struct {
 	// which paginate via ?page=N and report page/show_next in the body.
 	NextPageIndicatorPath string
 	CurrentPageNumberPath string
+
+	// FirstPageOnlyFields names top-level response fields to keep only on
+	// the very first page of a paginated result, dropping them from every
+	// subsequent page. Some endpoints attach a fixed-cost summary block
+	// (e.g. workouts_list's per-month histogram, confirmed live at ~1.5 KB)
+	// that's genuinely useful once but pure repeated overhead on every
+	// later page a caller pages through. Has no effect on a response with
+	// no item array at all (injectMetadataOnlyNextCursor's path) -- an
+	// explicit "select" naming one of these fields on a later page is a
+	// deliberate ask, not the unprojected repeated-overhead case this
+	// exists to trim.
+	FirstPageOnlyFields []string
 }
 
 type endpointCursor struct {
@@ -132,6 +145,9 @@ func endpointResponse(method string, data json.RawMessage, opts PageOptions) str
 	}
 	if strings.EqualFold(method, "GET") && opts.CursorParam != "" {
 		if out, ok := boundedSingleArrayPageObject(data, opts); ok {
+			return string(out)
+		}
+		if out, ok := injectMetadataOnlyNextCursor(data, opts); ok {
 			return string(out)
 		}
 	}
@@ -265,6 +281,57 @@ func boundedSingleArrayPageObject(data json.RawMessage, opts PageOptions) ([]byt
 	return boundedPageListEnvelope(arrayField, items, data, endpointListNote, opts, obj, nextUpstream), true
 }
 
+// injectMetadataOnlyNextCursor handles a response whose item array is
+// simply not present -- e.g. a "select" projection kept only metadata
+// fields (count, total, page, show_next, ...) and dropped ArrayField
+// entirely, which boundedSingleArrayPageObject can't page since there's no
+// items slice to draw a subset from. Without this, such a response falls
+// through untouched to the plain "fits under budget, return as-is" path,
+// silently losing the ability to continue even when the body's own
+// show_next says more data exists -- confirmed live: a caller checking
+// totals before a full pull got dead-ended exactly like the unprojected
+// case (Issue 11) was, just via a different route.
+//
+// There is no local item batch to sub-page here, so unlike
+// boundedPageListEnvelope this always resolves directly to the next
+// upstream page (or nothing, if none remains) rather than tracking a local
+// Offset -- there is nothing left in this response to offset into.
+// Scoped to responses that declare ArrayField (the tools known to carry
+// this pagination shape) so it never fires for endpoints that never had a
+// page-able array to begin with.
+func injectMetadataOnlyNextCursor(data json.RawMessage, opts PageOptions) ([]byte, bool) {
+	if opts.ArrayField == "" {
+		return nil, false
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(data, &obj) != nil {
+		return nil, false
+	}
+	if _, present := obj[opts.ArrayField]; present {
+		// Has the array field after all -- boundedSingleArrayPageObject
+		// already handled (or should have handled) this shape.
+		return nil, false
+	}
+	nextUpstream := extractStringPath(data, opts.NextCursorPath)
+	if nextUpstream == "" {
+		nextUpstream = extractNextIntegerPage(data, opts.NextPageIndicatorPath, opts.CurrentPageNumberPath)
+	}
+	if nextUpstream == "" {
+		return nil, false
+	}
+	cursor := encodeEndpointCursor(endpointCursor{Version: 1, UpstreamCursor: nextUpstream})
+	out := make(map[string]any, len(obj)+1)
+	for key, raw := range obj {
+		out[key] = raw
+	}
+	out["next_cursor"] = cursor
+	result, err := json.Marshal(out)
+	if err != nil {
+		return nil, false
+	}
+	return result, true
+}
+
 // resolveArrayField picks the object's items array. When field is non-empty
 // it's used directly (still validated as present and array-shaped) rather
 // than falling back to the auto-detect scan, which bails as soon as a
@@ -339,7 +406,17 @@ func boundedPageListEnvelope(field string, items []json.RawMessage, original jso
 		start = len(items)
 	}
 
-	build := func(subset []json.RawMessage, itemPreview string, nextCursor string) any {
+	// The caller's own incoming cursor -- not the locally-tracked Offset --
+	// is what actually distinguishes "this is the very first MCP call for
+	// this query" from a resumed one; Offset alone can't (a resumed call
+	// picking up at upstream-page-2/local-offset-0 also has start==0).
+	isFirstPage := opts.Cursor == ""
+	firstPageOnly := make(map[string]bool, len(opts.FirstPageOnlyFields))
+	for _, f := range opts.FirstPageOnlyFields {
+		firstPageOnly[f] = true
+	}
+
+	build := func(subset []json.RawMessage, itemPreview string, nextCursor string, itemLimited bool) any {
 		var out map[string]any
 		if base == nil {
 			out = map[string]any{}
@@ -349,13 +426,20 @@ func boundedPageListEnvelope(field string, items []json.RawMessage, original jso
 				if key == field {
 					continue
 				}
+				if !isFirstPage && firstPageOnly[key] {
+					continue
+				}
+				// count is intentionally left as whatever the upstream
+				// response reported (or absent, if it didn't report one) --
+				// same treatment as total/page/show_next below. An earlier
+				// version overwrote it with a synthetic -1 sentinel or the
+				// current locally-fetched batch's raw item count, which
+				// produced four different, undocumented behaviors across
+				// projected/unprojected/paginated/terminal calls and had no
+				// meaning a caller could rely on; total already covers the
+				// real collection-size use case.
 				out[key] = raw
 			}
-		}
-		if nextUpstream != "" || state.UpstreamCursor != "" {
-			out["count"] = -1
-		} else {
-			out["count"] = len(items)
 		}
 		out[field] = subset
 		out["returned_count"] = len(subset)
@@ -365,9 +449,20 @@ func boundedPageListEnvelope(field string, items []json.RawMessage, original jso
 		if nextCursor != "" {
 			out["truncated"] = true
 			out["next_cursor"] = nextCursor
-			out["original_bytes"] = len(original)
-			out["max_bytes"] = MaxBytes
-			out["note"] = note
+			if itemLimited {
+				// This page was cut at MaxItems while comfortably under
+				// MaxBytes -- the fixed page size, not a byte-budget
+				// overrun, is why more data remains. original_bytes/
+				// max_bytes are omitted rather than included-but-vacuous
+				// (a caller narrowing "the request" in response to them
+				// can't shrink a page that was never byte-constrained).
+				out["page_size_capped"] = true
+				out["note"] = pageSizeCapNote
+			} else {
+				out["original_bytes"] = len(original)
+				out["max_bytes"] = MaxBytes
+				out["note"] = note
+			}
 		}
 		return out
 	}
@@ -397,7 +492,7 @@ func fitJSONItems(items []json.RawMessage, build func([]json.RawMessage) any) []
 	return out
 }
 
-func fitJSONPageItems(items []json.RawMessage, start int, currentUpstream, nextUpstream string, build func([]json.RawMessage, string, string) any) []byte {
+func fitJSONPageItems(items []json.RawMessage, start int, currentUpstream, nextUpstream string, build func([]json.RawMessage, string, string, bool) any) []byte {
 	remaining := len(items) - start
 	if remaining < 0 {
 		remaining = 0
@@ -408,7 +503,15 @@ func fitJSONPageItems(items []json.RawMessage, start int, currentUpstream, nextU
 	}
 	for n := limit; n > 0; n-- {
 		next := nextPageCursor(start+n, len(items), currentUpstream, nextUpstream)
-		out, err := json.Marshal(build(items[start:start+n], "", next))
+		// itemLimited is true only on the very first (largest) attempt,
+		// and only when MaxItems -- not the remaining item count -- was
+		// the smaller bound: that's the one case where this page's size
+		// was chosen by the fixed item cap rather than by shrinking to
+		// fit MaxBytes. Any later iteration in this loop (n < limit)
+		// means bytes forced a cut below the item cap, which is
+		// genuinely byte-limited.
+		itemLimited := n == limit && limit == MaxItems
+		out, err := json.Marshal(build(items[start:start+n], "", next, itemLimited))
 		if err != nil {
 			continue
 		}
@@ -420,7 +523,7 @@ func fitJSONPageItems(items []json.RawMessage, start int, currentUpstream, nextU
 		next := nextPageCursor(start+1, len(items), currentUpstream, nextUpstream)
 		previewLimit := maxPreviewBytes
 		for previewLimit >= 0 {
-			out, err := json.Marshal(build(nil, previewString(items[start], previewLimit), next))
+			out, err := json.Marshal(build(nil, previewString(items[start], previewLimit), next, false))
 			if err == nil && len(out) <= MaxBytes {
 				return out
 			}
@@ -435,7 +538,7 @@ func fitJSONPageItems(items []json.RawMessage, start int, currentUpstream, nextU
 		}
 	}
 	next := nextPageCursor(len(items), len(items), currentUpstream, nextUpstream)
-	out, _ := json.Marshal(build(nil, "", next))
+	out, _ := json.Marshal(build(nil, "", next, false))
 	return out
 }
 

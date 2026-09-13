@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "id": "workouts-list-summary-first-page-only",
+  "applied_at": "2026-09-12",
+  "base_run_id": "20260714-231159",
+  "base_printing_press_version": "4.28.0",
+  "summary": "bound.PageOptions/mcpPageConfig carry a FirstPageOnlyFields list; workouts_list sets it to [\"summary\"]. A named field is kept only on a query's very first page (no incoming cursor) and dropped from every later page, so workouts_list's per-month workout histogram (confirmed live at ~1.5 KB) stops being repeated fixed overhead on every page a caller pages through. A regen touching workouts_list's mcpPageConfig must keep this set.",
+  "reason": "Live retesting found summary present unchanged on every cursor page of workouts_list, useful once on page 1 and pure repeated cost afterward -- flagged as an easy byte win on the one endpoint (workouts) whose sync/archive path is still unexercised in live testing.",
+  "files": [
+    "internal/mcp/bound/bound.go",
+    "internal/mcp/bound/bound_test.go",
+    "internal/mcp/tools.go"
+  ],
+  "validated_outcome": "go build/vet/test/govulncheck and verify_skill.py all green. TestEndpointPageResponseFirstPageOnlyFieldsDroppedOnLaterPages drives a first-page/second-page pair through the real EndpointPageResponse call path and asserts summary present on page one, absent on page two, with other fields (total) unaffected on both."
+}
