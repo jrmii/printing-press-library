@@ -828,9 +828,11 @@ func makeAPIHandlerVerbose(method, pathTemplate string, readOnly bool, binaryRes
 		// can still narrow the now-larger response down with select in the
 		// same call. Binary responses are base64-encoded file payloads, not
 		// JSON a dotted-path projection could meaningfully narrow.
+		var hasSelect bool
 		if !binaryResponse {
 			if selectFields, ok := args["select"].(string); ok && strings.TrimSpace(selectFields) != "" {
 				data = cli.FilterFieldsJSON(data, selectFields)
+				hasSelect = true
 			}
 		}
 
@@ -850,7 +852,7 @@ func makeAPIHandlerVerbose(method, pathTemplate string, readOnly bool, binaryRes
 			return mcplib.NewToolResultText(string(out)), nil
 		}
 		if pageConfig.CursorParam != "" {
-			return mcpToolPageResultText(method, data, pageConfig, mcpCursor), nil
+			return mcpToolPageResultText(method, data, pageConfig, mcpCursor, hasSelect), nil
 		}
 		return mcpToolResultText(method, data), nil
 	}
@@ -892,16 +894,24 @@ func mcpToolError(message string) *mcplib.CallToolResult {
 	return mcplib.NewToolResultError(bound.Text(message))
 }
 
-func mcpToolPageResultText(method string, data json.RawMessage, pageConfig mcpPageConfig, cursor string) *mcplib.CallToolResult {
-	return mcplib.NewToolResultText(bound.EndpointPageResponse(method, data, bound.PageOptions{
+func mcpToolPageResultText(method string, data json.RawMessage, pageConfig mcpPageConfig, cursor string, hasSelect bool) *mcplib.CallToolResult {
+	opts := bound.PageOptions{
 		Cursor:                cursor,
 		CursorParam:           pageConfig.CursorParam,
 		NextCursorPath:        pageConfig.NextCursorPath,
 		ArrayField:            pageConfig.ArrayField,
 		NextPageIndicatorPath: pageConfig.NextPageIndicatorPath,
 		CurrentPageNumberPath: pageConfig.CurrentPageNumberPath,
-		FirstPageOnlyFields:   pageConfig.FirstPageOnlyFields,
-	}))
+	}
+	// A caller who explicitly named a field via select has already made
+	// their own choice about what to keep -- FirstPageOnlyFields exists to
+	// trim the *default* unprojected response's repeated fixed cost, not
+	// to silently override a deliberate later-page ask for that same
+	// field (e.g. select=data.id,summary on page 2 of workouts_list).
+	if !hasSelect {
+		opts.FirstPageOnlyFields = pageConfig.FirstPageOnlyFields
+	}
+	return mcplib.NewToolResultText(bound.EndpointPageResponse(method, data, opts))
 }
 
 func newMCPClient() (*client.Client, error) {

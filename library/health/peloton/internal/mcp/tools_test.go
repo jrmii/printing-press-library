@@ -846,7 +846,7 @@ func TestMCPToolPageResultTextArrayFieldHintHandlesResidualInstructorsArray(t *t
 	}
 
 	pageConfig := mcpPageConfig{CursorParam: "page", ArrayField: "data"}
-	text := mcpTextContent(t, mcpToolPageResultText("GET", fixture, pageConfig, ""))
+	text := mcpTextContent(t, mcpToolPageResultText("GET", fixture, pageConfig, "", false))
 
 	var envelope struct {
 		Data       []json.RawMessage `json:"data"`
@@ -864,6 +864,51 @@ func TestMCPToolPageResultTextArrayFieldHintHandlesResidualInstructorsArray(t *t
 	}
 	if len(envelope.Data) == 0 {
 		t.Fatalf("expected real class records under \"data\": %s", text)
+	}
+}
+
+// TestMCPToolPageResultTextRespectsExplicitSelectOfFirstPageOnlyField
+// guards a Greptile review finding on the FirstPageOnlyFields fix: a
+// caller resuming workouts_list with an explicit select naming "summary"
+// (e.g. select=data.id,summary) has made a deliberate ask for it on that
+// page, distinct from the unprojected-default-response repeated-overhead
+// case FirstPageOnlyFields exists to trim. mcpToolPageResultText must not
+// pass FirstPageOnlyFields through to bound.go at all when hasSelect is
+// true, or an explicit later-page select would silently return less than
+// it asked for.
+func TestMCPToolPageResultTextRespectsExplicitSelectOfFirstPageOnlyField(t *testing.T) {
+	fixture, err := json.Marshal(map[string]any{
+		"data": []map[string]string{{"id": "w1"}}, "summary": map[string]any{"jan": 5},
+	})
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+	pageConfig := mcpPageConfig{CursorParam: "page", ArrayField: "data", FirstPageOnlyFields: []string{"summary"}}
+
+	// A resumed call (non-empty cursor) with an explicit select asking for
+	// summary must keep it.
+	explicitText := mcpTextContent(t, mcpToolPageResultText("GET", fixture, pageConfig, "some-cursor", true))
+	var explicit struct {
+		Summary map[string]any `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(explicitText), &explicit); err != nil {
+		t.Fatalf("result must remain valid JSON: %v\n%s", err, explicitText)
+	}
+	if explicit.Summary == nil {
+		t.Fatalf("explicit select naming summary on a resumed call must keep it: %s", explicitText)
+	}
+
+	// The same resumed call with no select (the default, unprojected
+	// shape FirstPageOnlyFields targets) must still drop it.
+	defaultText := mcpTextContent(t, mcpToolPageResultText("GET", fixture, pageConfig, "some-cursor", false))
+	var defaultResult struct {
+		Summary map[string]any `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(defaultText), &defaultResult); err != nil {
+		t.Fatalf("result must remain valid JSON: %v\n%s", err, defaultText)
+	}
+	if defaultResult.Summary != nil {
+		t.Fatalf("unprojected resumed call should still drop summary: %s", defaultText)
 	}
 }
 

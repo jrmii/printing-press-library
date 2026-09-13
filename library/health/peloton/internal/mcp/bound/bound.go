@@ -90,11 +90,17 @@ type PageOptions struct {
 	// subsequent page. Some endpoints attach a fixed-cost summary block
 	// (e.g. workouts_list's per-month histogram, confirmed live at ~1.5 KB)
 	// that's genuinely useful once but pure repeated overhead on every
-	// later page a caller pages through. Has no effect on a response with
-	// no item array at all (injectMetadataOnlyNextCursor's path) -- an
-	// explicit "select" naming one of these fields on a later page is a
-	// deliberate ask, not the unprojected repeated-overhead case this
-	// exists to trim.
+	// later page a caller pages through.
+	//
+	// This package has no visibility into whether a "select" projection
+	// ran (that happens entirely in the caller, before this package ever
+	// sees the data), so it cannot itself distinguish "this field survived
+	// because it's the unprojected default" from "the caller explicitly
+	// asked for it via select" -- stripping it unconditionally would
+	// silently return less than an explicit select=...,summary asked for
+	// on page 2+. The caller is responsible for only setting this field
+	// when no select was applied to the current call; see
+	// mcpToolPageResultText's hasSelect handling.
 	FirstPageOnlyFields []string
 }
 
