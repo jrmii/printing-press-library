@@ -98,6 +98,26 @@ type PageOptions struct {
 	FirstPageOnlyFields []string
 }
 
+// endpointCursor is an offset-based cursor: Offset positions within the
+// most recently fetched upstream page, UpstreamCursor carries whatever
+// value resumes the next upstream page (an opaque API cursor, or -- via
+// PageOptions' integer-page fallback -- a page number as a string).
+//
+// Known limitation, confirmed live and deliberately not fixed here: this
+// drifts under a moving head. If the underlying collection is sorted
+// newest-first (classes_search/classes_catalog's default
+// -original_air_time, workouts_list's -device_time_created_at) and new
+// records land at the head between two calls, an offset cursor now points
+// too far back -- re-delivering already-seen records (duplicates) on an
+// insert, or skipping unseen ones (silent, no error) on a deletion. A
+// keyset cursor (the sort key plus id of the last delivered record,
+// instead of a numeric position) would not have this failure mode, but
+// switching requires per-resource sort-key knowledge this package doesn't
+// have today. Acceptable for a caller pulling a snapshot in one sitting
+// (today's MCP conversational use); a caller doing full enumeration over a
+// live, changing collection (e.g. a future workflow_archive/sync path
+// built on this pagination) must dedupe by id regardless of cursor scheme,
+// and should not assume "no error" means "no records were skipped."
 type endpointCursor struct {
 	Version        int    `json:"v"`
 	Offset         int    `json:"o,omitempty"`
