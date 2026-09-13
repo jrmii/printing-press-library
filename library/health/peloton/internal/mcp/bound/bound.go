@@ -436,7 +436,7 @@ func boundedPageListEnvelope(field string, items []json.RawMessage, original jso
 		firstPageOnly[f] = true
 	}
 
-	build := func(subset []json.RawMessage, itemPreview string, nextCursor string, itemLimited bool) any {
+	build := func(subset []json.RawMessage, itemPreview string, nextCursor string, cut pageCutCause) any {
 		var out map[string]any
 		if base == nil {
 			out = map[string]any{}
@@ -467,21 +467,38 @@ func boundedPageListEnvelope(field string, items []json.RawMessage, original jso
 			out["item_preview"] = itemPreview
 		}
 		if nextCursor != "" {
-			out["truncated"] = true
 			out["next_cursor"] = nextCursor
-			if itemLimited {
+			switch cut {
+			case pageCutItemLimit:
 				// This page was cut at MaxItems while comfortably under
 				// MaxBytes -- the fixed page size, not a byte-budget
 				// overrun, is why more data remains. original_bytes/
 				// max_bytes are omitted rather than included-but-vacuous
 				// (a caller narrowing "the request" in response to them
 				// can't shrink a page that was never byte-constrained).
+				out["truncated"] = true
 				out["page_size_capped"] = true
 				out["note"] = pageSizeCapNote
-			} else {
+			case pageCutByteLimit:
+				out["truncated"] = true
 				out["original_bytes"] = len(original)
 				out["max_bytes"] = MaxBytes
 				out["note"] = note
+			case pageCutNone:
+				// Nothing was held back from the batch this specific call
+				// fetched -- the caller's own request (its own limit, or
+				// simply "whatever remained") was delivered in full.
+				// next_cursor is still present because more data exists
+				// further upstream (show_next, passed through in base,
+				// already says so), but truncated/page_size_capped/the
+				// byte fields would misrepresent this call as having been
+				// cut short when it wasn't. Confirmed live: a limit=20
+				// classes_search call and a limit=1 workouts_list call
+				// each delivered exactly what was asked, from a
+				// 226-/3,734-record collection, yet reported
+				// truncated:true with byte fields implying a narrower
+				// request would help -- it already was as narrow as
+				// requested.
 			}
 		}
 		return out
@@ -512,7 +529,30 @@ func fitJSONItems(items []json.RawMessage, build func([]json.RawMessage) any) []
 	return out
 }
 
-func fitJSONPageItems(items []json.RawMessage, start int, currentUpstream, nextUpstream string, build func([]json.RawMessage, string, string, bool) any) []byte {
+// pageCutCause explains why a paginated response returned fewer items than
+// remained in the batch bound.go was working from, if it did at all. Kept
+// distinct from whether next_cursor is present: more upstream data can
+// exist (and next_cursor still gets emitted) even when nothing was held
+// back from THIS particular call -- see pageCutNone's use in
+// boundedPageListEnvelope's build for the live-confirmed false positive
+// this distinction fixes.
+type pageCutCause int
+
+const (
+	// pageCutNone: this call's own batch (already scoped by the caller's
+	// own limit request, honored upstream, and by start:len(items) for a
+	// resumed call) was delivered in full. Nothing was cut.
+	pageCutNone pageCutCause = iota
+	// pageCutItemLimit: cut down to MaxItems while comfortably under
+	// MaxBytes -- the fixed page size, not a byte-budget overrun, is why
+	// more of THIS batch remains unshipped.
+	pageCutItemLimit
+	// pageCutByteLimit: cut below MaxItems (or below the batch size, or to
+	// zero items with only a preview) because the byte budget forced it.
+	pageCutByteLimit
+)
+
+func fitJSONPageItems(items []json.RawMessage, start int, currentUpstream, nextUpstream string, build func([]json.RawMessage, string, string, pageCutCause) any) []byte {
 	remaining := len(items) - start
 	if remaining < 0 {
 		remaining = 0
@@ -523,15 +563,20 @@ func fitJSONPageItems(items []json.RawMessage, start int, currentUpstream, nextU
 	}
 	for n := limit; n > 0; n-- {
 		next := nextPageCursor(start+n, len(items), currentUpstream, nextUpstream)
-		// itemLimited is true only on the very first (largest) attempt,
-		// and only when MaxItems -- not the remaining item count -- was
-		// the smaller bound: that's the one case where this page's size
-		// was chosen by the fixed item cap rather than by shrinking to
-		// fit MaxBytes. Any later iteration in this loop (n < limit)
-		// means bytes forced a cut below the item cap, which is
-		// genuinely byte-limited.
-		itemLimited := n == limit && limit == MaxItems
-		out, err := json.Marshal(build(items[start:start+n], "", next, itemLimited))
+		// Only the very first (largest) attempt can possibly be
+		// uncut or item-limited -- any later iteration in this loop
+		// (n < limit) means bytes forced a cut below what would
+		// otherwise have been returned, which is always byte-limited.
+		cut := pageCutByteLimit
+		if n == limit {
+			switch {
+			case n == remaining:
+				cut = pageCutNone
+			case limit == MaxItems:
+				cut = pageCutItemLimit
+			}
+		}
+		out, err := json.Marshal(build(items[start:start+n], "", next, cut))
 		if err != nil {
 			continue
 		}
@@ -543,7 +588,7 @@ func fitJSONPageItems(items []json.RawMessage, start int, currentUpstream, nextU
 		next := nextPageCursor(start+1, len(items), currentUpstream, nextUpstream)
 		previewLimit := maxPreviewBytes
 		for previewLimit >= 0 {
-			out, err := json.Marshal(build(nil, previewString(items[start], previewLimit), next, false))
+			out, err := json.Marshal(build(nil, previewString(items[start], previewLimit), next, pageCutByteLimit))
 			if err == nil && len(out) <= MaxBytes {
 				return out
 			}
@@ -558,7 +603,7 @@ func fitJSONPageItems(items []json.RawMessage, start int, currentUpstream, nextU
 		}
 	}
 	next := nextPageCursor(len(items), len(items), currentUpstream, nextUpstream)
-	out, _ := json.Marshal(build(nil, "", next, false))
+	out, _ := json.Marshal(build(nil, "", next, pageCutByteLimit))
 	return out
 }
 

@@ -426,6 +426,56 @@ func TestEndpointPageResponseCountPassesThroughUnmodified(t *testing.T) {
 	}
 }
 
+// TestEndpointPageResponseNoTruncationClaimWhenRequestFullySatisfied guards
+// the B7 false positive: a call whose own fetched batch is small enough to
+// return in full (well under both MaxItems and MaxBytes) still got
+// truncated:true plus byte-attribution fields whenever more data existed
+// further upstream (nextUpstream non-empty), even though nothing was cut
+// from THIS response -- confirmed live on a classes_search limit=20 call
+// (20 of 20 delivered, 226 in the full collection) and a workouts_list
+// limit=1 call (1 of 1 delivered, 3,734 in the full collection). Both
+// falsely told the caller "narrow the request", which cannot help a
+// request that was already fully satisfied. next_cursor must still be
+// present (more data exists and show_next says so), but truncated/
+// page_size_capped/max_bytes/original_bytes must all be absent.
+func TestEndpointPageResponseNoTruncationClaimWhenRequestFullySatisfied(t *testing.T) {
+	items := make([]map[string]string, 0, 20)
+	for i := 0; i < 20; i++ {
+		items = append(items, map[string]string{"id": strconv.Itoa(i)})
+	}
+	fixture := mustMarshal(t, map[string]any{
+		"data": items, "page": 0, "show_next": true, "total": 226,
+	})
+
+	text := EndpointPageResponse("GET", fixture, PageOptions{
+		CursorParam:           "page",
+		ArrayField:            "data",
+		NextPageIndicatorPath: "show_next",
+		CurrentPageNumberPath: "page",
+	})
+
+	var envelope struct {
+		ReturnedCount  int    `json:"returned_count"`
+		Truncated      bool   `json:"truncated"`
+		PageSizeCapped bool   `json:"page_size_capped"`
+		MaxBytes       int    `json:"max_bytes"`
+		OriginalBytes  int    `json:"original_bytes"`
+		NextCursor     string `json:"next_cursor"`
+	}
+	if err := json.Unmarshal([]byte(text), &envelope); err != nil {
+		t.Fatalf("result must remain valid JSON: %v\n%s", err, text)
+	}
+	if envelope.ReturnedCount != 20 {
+		t.Fatalf("returned_count = %d, want 20 (the full requested batch)", envelope.ReturnedCount)
+	}
+	if envelope.Truncated || envelope.PageSizeCapped || envelope.MaxBytes != 0 || envelope.OriginalBytes != 0 {
+		t.Fatalf("a fully-satisfied request must not claim any truncation cause: %s", text)
+	}
+	if envelope.NextCursor == "" {
+		t.Fatalf("next_cursor must still be present so a caller can continue into the rest of the collection: %s", text)
+	}
+}
+
 // TestEndpointPageResponseFirstPageOnlyFieldsDroppedOnLaterPages guards
 // workouts_list's summary field: a fixed-cost block (its real per-month
 // workout histogram measured ~1.5 KB live) useful on the first page and
